@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
@@ -71,3 +72,7 @@ export default defineConfig([
   },
 ])
 ```
+=======
+# MyAccountingApp
+Personal accounting app built with React, TypeScript, Vite and Supabase. Tracks income and expenses with real-time dashboard, KPI cards and charts.
+>>>>>>> 403196454a21c185d9b529b3b89052b999891510
