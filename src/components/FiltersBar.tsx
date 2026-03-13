@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { DashboardFilters } from '../types';
-import { Calendar, Filter, Search } from 'lucide-react';
+import { Calendar, ChevronDown, ChevronUp, Filter, Search, RotateCcw } from 'lucide-react';
 
 interface FiltersBarProps {
   filters: DashboardFilters;
@@ -24,9 +24,54 @@ const FiltersBar: React.FC<FiltersBarProps> = ({ filters, setFilters, availableC
     });
   };
 
+  const handleClearFilters = () => {
+    setFilters({
+      dateFrom: null,
+      dateTo: null,
+      tipo: 'Todos',
+      categorias: [],
+      canales: [],
+      estadoPago: 'Todos',
+      activeSearch: '',
+    });
+  };
+
+  const [isMinimized, setIsMinimized] = useState(false);
+
   return (
     <div className="card" style={{ marginBottom: '2rem' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isMinimized ? '0' : '1.5rem' }}>
+        <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '1rem' }}>
+          <Filter size={18} />
+          Filtros de busqueda
+        </h3>
+        
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button 
+            type="button" 
+            onClick={handleClearFilters}
+            className="ghost-icon-button" 
+            title="Restablecer filtros"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem' }}
+          >
+            <RotateCcw size={16} />
+            <span className="hide-mobile">Restablecer</span>
+          </button>
+          
+          <button 
+            type="button" 
+            onClick={() => setIsMinimized(!isMinimized)}
+            className="ghost-icon-button" 
+            title={isMinimized ? "Maximizar filtros" : "Minimizar filtros"}
+          >
+            {isMinimized ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+          </button>
+        </div>
+      </div>
+
+      {!isMinimized && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>
         <div className="filter-group">
           <label style={labelStyle}>
             <Calendar size={14} /> Fecha desde
@@ -121,6 +166,8 @@ const FiltersBar: React.FC<FiltersBarProps> = ({ filters, setFilters, availableC
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };

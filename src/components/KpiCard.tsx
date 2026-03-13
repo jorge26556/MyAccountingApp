@@ -2,7 +2,7 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 
 interface KpiCardProps {
-  title: string;
+  title: React.ReactNode;
   value: string;
   subtitle?: string;
   icon: LucideIcon;
@@ -15,7 +15,7 @@ const KpiCard: React.FC<KpiCardProps> = ({ title, value, subtitle, icon: Icon, c
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
         <div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>{title}</p>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>{title}</div>
           <h3 style={{ fontSize: '1.75rem', fontWeight: '700', color: 'var(--text-primary)' }}>{value}</h3>
         </div>
         <div style={{ 

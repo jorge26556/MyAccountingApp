@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { endOfDay, startOfDay } from 'date-fns';
+import { differenceInDays, endOfDay, startOfDay } from 'date-fns';
 import { Activity, DollarSign, LogOut, Plus, Target, TrendingDown, TrendingUp, User } from 'lucide-react';
 import DashboardCharts from './components/DashboardCharts';
 import FiltersBar from './components/FiltersBar';
@@ -18,8 +18,12 @@ import {
   fetchCategories,
   fetchTransactions,
   updateTransaction,
+  fetchSavingsGoals,
+  createSavingsGoal,
+  updateSavingsGoal,
+  deleteSavingsGoal,
 } from './services/api';
-import type { AppView, Category, DashboardFilters, KpiData, Transaction } from './types';
+import type { AppView, Category, DashboardFilters, KpiData, SavingsGoal, Transaction } from './types';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
@@ -29,6 +33,7 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<AppView>('dashboard');
   const [modalState, setModalState] = useState<null | 'create' | Transaction>(null);
+  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([]);
 
   const [filters, setFilters] = useState<DashboardFilters>({
     dateFrom: null,
@@ -46,14 +51,34 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []);
 
+  const handleAddGoal = async (name: string, amount: number) => {
+    const goal = await createSavingsGoal({ name, amount });
+    setSavingsGoals(prev => [goal, ...prev]);
+  };
+
+  const handleUpdateGoal = async (id: string, name: string, amount: number) => {
+    const updated = await updateSavingsGoal(id, { name, amount });
+    setSavingsGoals(prev => prev.map(g => g.id === id ? updated : g));
+  };
+
+  const handleDeleteGoal = async (id: string) => {
+    await deleteSavingsGoal(id);
+    setSavingsGoals(prev => prev.filter(g => g.id !== id));
+  };
+
   const loadAppData = async () => {
     if (!session) return;
 
     setLoading(true);
     try {
-      const [transactions, categoryList] = await Promise.all([fetchTransactions(), fetchCategories()]);
+      const [transactions, categoryList, goalsList] = await Promise.all([
+        fetchTransactions(), 
+        fetchCategories(),
+        fetchSavingsGoals()
+      ]);
       setData(transactions);
       setCategories(categoryList);
+      setSavingsGoals(goalsList);
       setError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error al cargar la informacion';
@@ -153,8 +178,17 @@ const App: React.FC = () => {
     const beneficioNeto = totalIngresos - totalGastos;
 
     const categoryBeneficio: Record<string, number> = {};
+    const categoryGastos: Record<string, number> = {};
+    let mayorGastoIndividual = 0;
+
     filteredData.forEach(item => {
-      categoryBeneficio[item.categoria] = (categoryBeneficio[item.categoria] ?? 0) + item.importe;
+      if (item.tipo === 'Ingreso') {
+        categoryBeneficio[item.categoria] = (categoryBeneficio[item.categoria] ?? 0) + item.importe;
+      } else {
+        const absVal = Math.abs(item.importe);
+        categoryGastos[item.categoria] = (categoryGastos[item.categoria] ?? 0) + absVal;
+        if (absVal > mayorGastoIndividual) mayorGastoIndividual = absVal;
+      }
     });
 
     let bestCat = { nombre: 'N/A', beneficio: 0 };
@@ -164,10 +198,61 @@ const App: React.FC = () => {
       }
     });
 
+    let worstCat = { nombre: 'N/A', gasto: 0 };
+    Object.entries(categoryGastos).forEach(([name, gasto]) => {
+      if (gasto > worstCat.gasto) worstCat = { nombre: name, gasto };
+    });
+
     const servicios = filteredData.filter(item => item.categoria === 'Servicios');
-    const ticketMedio = servicios.length > 0
+    const ticketMedioServicios = servicios.length > 0
       ? servicios.reduce((acc, current) => acc + current.importe, 0) / servicios.length
       : 0;
+
+    const todosGastos = filteredData.filter(item => item.tipo === 'Gasto');
+    const ticketMedioGasto = todosGastos.length > 0 ? totalGastos / todosGastos.length : 0;
+
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    let ingresosMesActual = 0;
+    let gastosMesActual = 0;
+    let ingresosMesAnterior = 0;
+    let gastosMesAnterior = 0;
+
+    data.forEach(item => {
+      const d = item.fecha;
+      const tMonth = d.getMonth();
+      const tYear = d.getFullYear();
+      if (tYear === currentYear && tMonth === currentMonth) {
+        if (item.tipo === 'Ingreso') ingresosMesActual += item.importe;
+        else gastosMesActual += Math.abs(item.importe);
+      } else if ((tYear === currentYear && tMonth === currentMonth - 1) || (currentMonth === 0 && tYear === currentYear - 1 && tMonth === 11)) {
+        if (item.tipo === 'Ingreso') ingresosMesAnterior += item.importe;
+        else gastosMesAnterior += Math.abs(item.importe);
+      }
+    });
+
+    const ahorroMesActual = ingresosMesActual - gastosMesActual;
+    const ahorroMesAnterior = ingresosMesAnterior - gastosMesAnterior;
+    
+    let variacionAhorro = 0;
+    if (ahorroMesAnterior !== 0) {
+      variacionAhorro = ((ahorroMesActual - ahorroMesAnterior) / Math.abs(ahorroMesAnterior)) * 100;
+    } else {
+      variacionAhorro = ahorroMesActual > 0 ? 100 : (ahorroMesActual < 0 ? -100 : 0);
+    }
+
+    let gastoPromedioDiario = 0;
+    if (todosGastos.length > 0) {
+      const dates = todosGastos.map(i => i.fecha.getTime());
+      const minDate = new Date(Math.min(...dates));
+      const maxDate = new Date(Math.max(...dates));
+      const days = differenceInDays(endOfDay(maxDate), startOfDay(minDate)) + 1;
+      gastoPromedioDiario = totalGastos / (days > 0 ? days : 1);
+    }
+
+    const metaAhorroActiva = savingsGoals.length > 0 ? savingsGoals[0] : null;
 
     return {
       totalIngresos,
@@ -175,9 +260,16 @@ const App: React.FC = () => {
       beneficioNeto,
       categoriaMasRentable: bestCat,
       numOperaciones: filteredData.length,
-      ticketMedioServicios: ticketMedio,
+      ticketMedioServicios,
+      ticketMedioGasto,
+      ahorroMesActual,
+      variacionAhorro,
+      categoriaMasGasto: worstCat,
+      gastoPromedioDiario,
+      metaAhorroActiva,
+      mayorGastoIndividual,
     };
-  }, [filteredData]);
+  }, [filteredData, data, savingsGoals]);
 
   const formatCurrency = (value: number) => new Intl.NumberFormat('es-CO', {
     style: 'currency',
@@ -213,7 +305,7 @@ const App: React.FC = () => {
             </button>
           </div>
 
-          {activeView === 'dashboard' && (
+          {(activeView === 'dashboard' || activeView === 'transactions') && (
             <button onClick={() => setModalState('create')} className="primary-action">
               <Plus size={18} />
               Anadir transaccion
@@ -231,7 +323,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {activeView === 'dashboard' ? (
+      {activeView === 'dashboard' && (
         <>
           <FiltersBar
             filters={filters}
@@ -240,15 +332,47 @@ const App: React.FC = () => {
             availableCanales={availableCanales}
           />
 
-          <div className="kpi-grid">
+          <div className="dashboard-kpi-grid">
             <KpiCard title="Ingresos totales" value={formatCurrency(kpis.totalIngresos)} icon={TrendingUp} color="var(--success)" subtitle="Suma de todos tus ingresos" />
             <KpiCard title="Gastos totales" value={formatCurrency(kpis.totalGastos)} icon={TrendingDown} color="var(--danger)" subtitle="Suma absoluta de tus gastos" />
             <KpiCard title="Beneficio neto" value={formatCurrency(kpis.beneficioNeto)} icon={DollarSign} color={kpis.beneficioNeto >= 0 ? 'var(--success)' : 'var(--danger)'} isPositive={kpis.beneficioNeto >= 0} subtitle={kpis.beneficioNeto >= 0 ? 'Rentabilidad positiva' : 'Deficit operativo'} />
-            <KpiCard title="Cat. mas rentable" value={kpis.categoriaMasRentable.nombre} icon={Target} color="var(--accent-secondary)" subtitle={formatCurrency(kpis.categoriaMasRentable.beneficio)} />
-            <KpiCard title="Ticket medio" value={formatCurrency(kpis.ticketMedioServicios)} icon={Activity} color="var(--info)" subtitle="Promedio categoria Servicios" />
+            <KpiCard title="Transacciones" value={String(kpis.numOperaciones)} icon={Activity} color="var(--accent-secondary)" subtitle="Total de registros" />
+            <KpiCard title="Variacion ahorro" value={`${kpis.variacionAhorro > 0 ? '+' : ''}${kpis.variacionAhorro.toFixed(1)}%`} icon={Target} color={kpis.variacionAhorro >= 0 ? 'var(--success)' : 'var(--danger)'} isPositive={kpis.variacionAhorro >= 0} subtitle="Frente al mes anterior" />
+            <KpiCard title="Ticket medio gastos" value={formatCurrency(kpis.ticketMedioGasto)} icon={Activity} color="var(--info)" subtitle="Promedio gastado por pago" />
+            <KpiCard title="Promedio diario" value={formatCurrency(kpis.gastoPromedioDiario)} icon={TrendingDown} color="var(--danger)" subtitle="Gasto medio por dia" />
+            <KpiCard title="Mayor Cat. Gasto" value={kpis.categoriaMasGasto.nombre} icon={Target} color="var(--warning)" subtitle={formatCurrency(kpis.categoriaMasGasto.gasto)} />
+            <KpiCard title="Mayor gasto single" value={formatCurrency(kpis.mayorGastoIndividual)} icon={Activity} color="var(--danger)" subtitle="En esta busqueda" />
+            {kpis.metaAhorroActiva && (
+              <KpiCard
+                title={
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span>Meta: {kpis.metaAhorroActiva.name}</span>
+                    <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>Valor meta: {formatCurrency(kpis.metaAhorroActiva.amount)}</span>
+                  </div>
+                }
+                value={formatCurrency(kpis.ahorroMesActual)}
+                icon={DollarSign}
+                color={kpis.ahorroMesActual >= kpis.metaAhorroActiva.amount ? 'var(--success)' : 'var(--info)'}
+                isPositive={kpis.ahorroMesActual >= kpis.metaAhorroActiva.amount}
+                subtitle={kpis.ahorroMesActual >= kpis.metaAhorroActiva.amount
+                  ? `Completada`
+                  : `Faltan ${formatCurrency(kpis.metaAhorroActiva.amount - kpis.ahorroMesActual)}`}
+              />
+            )}
           </div>
 
           <DashboardCharts data={filteredData} />
+        </>
+      )}
+
+      {activeView === 'transactions' && (
+        <>
+          <FiltersBar
+            filters={filters}
+            setFilters={setFilters}
+            availableCategorias={availableCategorias}
+            availableCanales={availableCanales}
+          />
 
           <div className="section-heading">
             <h3>Historial de transacciones</h3>
@@ -261,14 +385,20 @@ const App: React.FC = () => {
             onDelete={handleDeleteTransaction}
           />
         </>
-      ) : (
-        <SettingsPanel
-          categories={categories}
-          loading={loading}
-          onAddCategory={handleAddCategory}
-          onDeleteCategory={handleDeleteCategory}
-        />
       )}
+
+        {activeView === 'settings' && (
+          <SettingsPanel
+            categories={categories}
+            loading={loading}
+            onAddCategory={handleAddCategory}
+            onDeleteCategory={handleDeleteCategory}
+            savingsGoals={savingsGoals}
+            onAddGoal={handleAddGoal}
+            onUpdateGoal={handleUpdateGoal}
+            onDeleteGoal={handleDeleteGoal}
+          />
+        )}
 
       {modalState !== null && (
         <TransactionModal
@@ -279,7 +409,7 @@ const App: React.FC = () => {
         />
       )}
 
-      <footer className="app-footer">&copy; {new Date().getFullYear()} MyContabilidadApp - Sistema de gestion financiera personal</footer>
+      <footer className="app-footer">&copy; {new Date().getFullYear()} © Jorge Gaitán | 2026 - MyContabilidadApp - Sistema de gestion financiera personal</footer>
     </div>
   );
 };

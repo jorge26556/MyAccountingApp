@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Settings } from 'lucide-react';
+import { Home, List, Settings } from 'lucide-react';
 import type { AppView } from '../types';
 
 interface TopNavProps {
@@ -10,6 +10,7 @@ interface TopNavProps {
 const TopNav: React.FC<TopNavProps> = ({ activeView, onChangeView }) => {
   const items: Array<{ id: AppView; label: string; icon: React.ReactNode }> = [
     { id: 'dashboard', label: 'Inicio', icon: <Home size={16} /> },
+    { id: 'transactions', label: 'Transacciones', icon: <List size={16} /> },
     { id: 'settings', label: 'Configuracion', icon: <Settings size={16} /> },
   ];
 

@@ -1,6 +1,12 @@
 export type TransactionType = "Ingreso" | "Gasto";
 export type PaymentStatus = "Pagado" | "Pendiente";
-export type AppView = "dashboard" | "settings";
+export type AppView = "dashboard" | "transactions" | "settings";
+
+export interface SavingsGoal {
+  id: string;
+  name: string;
+  amount: number;
+}
 
 export interface Transaction {
   id: string;
@@ -39,4 +45,14 @@ export interface KpiData {
   };
   numOperaciones: number;
   ticketMedioServicios: number;
+  ticketMedioGasto: number;
+  ahorroMesActual: number;
+  variacionAhorro: number;
+  categoriaMasGasto: {
+    nombre: string;
+    gasto: number;
+  };
+  gastoPromedioDiario: number;
+  metaAhorroActiva: SavingsGoal | null;
+  mayorGastoIndividual: number;
 }

@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import type { Category, PaymentStatus, Transaction, TransactionType } from '../types';
+import type { Category, PaymentStatus, Transaction, TransactionType, SavingsGoal } from '../types';
 
 const DEFAULT_CATEGORY_NAMES = ['Arriendo', 'Mercado', 'Servicios', 'Salidas', 'Viajes', 'Extra'];
 const CATEGORY_STORAGE_KEY = 'my-accounting-app.categories';
@@ -252,3 +252,80 @@ export const deleteTransaction = async (id: string): Promise<void> => {
     throw new Error('Error al eliminar de Supabase');
   }
 };
+
+export const fetchSavingsGoals = async (): Promise<SavingsGoal[]> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const { data, error } = await supabase
+    .from('savings_goals')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching savings goals:', error);
+    throw new Error('Error al cargar metas de ahorro desde Supabase');
+  }
+
+  return data || [];
+};
+
+export const createSavingsGoal = async (goal: Omit<SavingsGoal, 'id'>): Promise<SavingsGoal> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Usuario no autenticado');
+
+  const { data, error } = await supabase
+    .from('savings_goals')
+    .insert([{
+      name: goal.name,
+      amount: goal.amount,
+      user_id: user.id
+    }])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating savings goal:', error);
+    throw new Error('Error al crear meta de ahorro');
+  }
+
+  return data;
+};
+
+export const updateSavingsGoal = async (id: string, updates: Partial<Omit<SavingsGoal, 'id'>>): Promise<SavingsGoal> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Usuario no autenticado');
+
+  const { data, error } = await supabase
+    .from('savings_goals')
+    .update(updates)
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating savings goal:', error);
+    throw new Error('Error al actualizar meta de ahorro');
+  }
+
+  return data;
+};
+
+export const deleteSavingsGoal = async (id: string): Promise<void> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Usuario no autenticado');
+
+  const { error } = await supabase
+    .from('savings_goals')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', user.id);
+
+  if (error) {
+    console.error('Error deleting savings goal:', error);
+    throw new Error('Error al eliminar meta de ahorro');
+  }
+};
+
