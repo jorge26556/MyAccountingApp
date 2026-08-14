@@ -1,6 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { X, Save, PlusCircle, MinusCircle } from 'lucide-react';
-import type { Transaction, TransactionType, PaymentStatus } from '../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { MinusCircle, PlusCircle, Save, X } from 'lucide-react';
+import type { PaymentStatus, Transaction, TransactionType } from '../types';
+import { toDateString, today } from '../lib/dates';
+import { formatCurrency } from '../lib/format';
+import { errorMessage, useToast } from '../lib/toast';
 
 interface TransactionModalProps {
   categories: string[];
@@ -11,65 +14,25 @@ interface TransactionModalProps {
 
 const CANALES = ['Directo', 'Transferencia', 'Tarjeta', 'Efectivo', 'Nequi', 'Daviplata', 'Otro'];
 
-const TOKEN = {
-  bgOverlay: 'rgba(0, 0, 0, 0.75)',
-  bgCard: '#161b22',
-  bgInput: '#0d1117',
-  border: '#30363d',
-  textPrimary: '#f0f6fc',
-  textSecondary: '#8b949e',
-  success: '#3fb950',
-  danger: '#f85149',
-  radius: '10px',
-  radiusSm: '8px',
-};
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '0.65rem 0.85rem',
-  backgroundColor: TOKEN.bgInput,
-  border: `1px solid ${TOKEN.border}`,
-  borderRadius: TOKEN.radiusSm,
-  color: TOKEN.textPrimary,
-  fontSize: '0.9rem',
-  outline: 'none',
-  transition: 'border-color 0.15s ease',
-  colorScheme: 'dark',
-};
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: '0.78rem',
-  fontWeight: '600',
-  letterSpacing: '0.04em',
-  textTransform: 'uppercase',
-  color: TOKEN.textSecondary,
-  marginBottom: '0.4rem',
-};
-
-const fieldStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column' };
-
-const toDateString = (d: Date) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-
-const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose, onSave, editingTransaction }) => {
+const TransactionModal: React.FC<TransactionModalProps> = ({
+  categories,
+  onClose,
+  onSave,
+  editingTransaction,
+}) => {
+  const toast = useToast();
   const isEditMode = Boolean(editingTransaction);
-  const selectableCategories = useMemo(() => {
-    const currentCategory = editingTransaction?.categoria?.trim();
-    const merged = currentCategory && !categories.includes(currentCategory)
-      ? [currentCategory, ...categories]
-      : categories;
+  const dialogRef = useRef<HTMLDivElement>(null);
 
+  const selectableCategories = useMemo(() => {
+    const current = editingTransaction?.categoria?.trim();
+    const merged = current && !categories.includes(current) ? [current, ...categories] : categories;
     return merged.filter(Boolean);
   }, [categories, editingTransaction?.categoria]);
 
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
-    fecha: editingTransaction ? toDateString(editingTransaction.fecha) : new Date().toISOString().split('T')[0],
+    fecha: toDateString(editingTransaction?.fecha ?? today()),
     tipo: (editingTransaction?.tipo ?? 'Gasto') as TransactionType,
     categoria: editingTransaction?.categoria ?? selectableCategories[0] ?? '',
     importe: editingTransaction ? String(Math.abs(editingTransaction.importe)) : '',
@@ -78,83 +41,69 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose
     canal: editingTransaction?.canal ?? 'Directo',
   });
 
-  const set = (key: string, value: string) => setFormData(prev => ({ ...prev, [key]: value }));
+  const set = (key: keyof typeof formData, value: string) =>
+    setFormData(prev => ({ ...prev, [key]: value }));
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Cerrar con Escape es lo que espera cualquiera frente a un modal.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose, loading]);
+
+  const importeNumerico = Number(formData.importe);
+  const importeValido = Number.isFinite(importeNumerico) && importeNumerico > 0;
+  const noCategoriesAvailable = selectableCategories.length === 0;
+  const puedeGuardar = importeValido && !noCategoriesAvailable && !loading;
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!puedeGuardar) return;
+
     setLoading(true);
-
     try {
       const [year, month, day] = formData.fecha.split('-').map(Number);
       await onSave({
-        ...formData,
         fecha: new Date(year, month - 1, day),
-        importe: Number(formData.importe),
+        tipo: formData.tipo,
+        categoria: formData.categoria,
+        importe: Math.abs(importeNumerico),
+        estado_pago: formData.estado_pago,
+        descripcion: formData.descripcion.trim(),
+        canal: formData.canal,
       });
       onClose();
-    } catch (err) {
-      console.error(err);
-      alert('Error al guardar la transaccion');
+    } catch (error) {
+      toast.error(errorMessage(error, 'No se pudo guardar la transaccion'));
     } finally {
       setLoading(false);
     }
   };
 
   const isIngreso = formData.tipo === 'Ingreso';
-  const noCategoriesAvailable = selectableCategories.length === 0;
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: TOKEN.bgOverlay,
-        backdropFilter: 'blur(6px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: '1rem',
+      style={overlayStyle}
+      onMouseDown={event => {
+        if (event.target === event.currentTarget && !loading) onClose();
       }}
     >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: '480px',
-          backgroundColor: TOKEN.bgCard,
-          border: `1px solid ${TOKEN.border}`,
-          borderRadius: '16px',
-          padding: '2rem',
-          boxShadow: '0 24px 48px rgba(0,0,0,0.6)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1.5rem',
-        }}
-      >
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={isEditMode ? 'Editar transaccion' : 'Anadir transaccion'} style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <h3 style={{ color: TOKEN.textPrimary, fontSize: '1.15rem', fontWeight: '700', margin: 0 }}>
-              {isEditMode ? 'Editar transaccion' : 'Anadir transaccion'}
+            <h3 style={{ color: 'var(--text-primary)', fontSize: '1.15rem', fontWeight: 700, margin: 0 }}>
+              {isEditMode ? 'Editar transacción' : 'Añadir transacción'}
             </h3>
             {isEditMode && (
-              <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: TOKEN.textSecondary }}>
-                ID {editingTransaction?.id.slice(0, 8)}...
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                ID {editingTransaction?.id.slice(0, 8)}…
               </p>
             )}
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: TOKEN.textSecondary,
-              display: 'flex',
-              alignItems: 'center',
-              padding: '4px',
-              borderRadius: '6px',
-            }}
-          >
+          <button onClick={onClose} aria-label="Cerrar" style={closeBtnStyle}>
             <X size={20} />
           </button>
         </div>
@@ -163,26 +112,30 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             {(['Ingreso', 'Gasto'] as TransactionType[]).map(tipo => {
               const active = formData.tipo === tipo;
-              const color = tipo === 'Ingreso' ? TOKEN.success : TOKEN.danger;
+              const color = tipo === 'Ingreso' ? 'var(--success)' : 'var(--danger)';
               return (
                 <button
                   key={tipo}
                   type="button"
+                  aria-pressed={active}
                   onClick={() => set('tipo', tipo)}
                   style={{
                     padding: '0.7rem',
-                    borderRadius: TOKEN.radiusSm,
-                    border: `1.5px solid ${active ? color : TOKEN.border}`,
-                    backgroundColor: active ? `${color}18` : 'transparent',
-                    color: active ? color : TOKEN.textSecondary,
-                    fontWeight: '600',
+                    borderRadius: '8px',
+                    border: `1.5px solid ${active ? color : 'var(--border-color)'}`,
+                    backgroundColor: active
+                      ? tipo === 'Ingreso'
+                        ? 'rgba(63,185,80,0.12)'
+                        : 'rgba(248,81,73,0.12)'
+                      : 'transparent',
+                    color: active ? color : 'var(--text-secondary)',
+                    fontWeight: 600,
                     fontSize: '0.9rem',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     gap: '0.45rem',
-                    transition: 'all 0.15s ease',
                   }}
                 >
                   {tipo === 'Ingreso' ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
@@ -193,22 +146,30 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose
           </div>
 
           <div style={fieldStyle}>
-            <label style={labelStyle}>Fecha</label>
-            <input type="date" value={formData.fecha} onChange={e => set('fecha', e.target.value)} required style={inputStyle} />
+            <label style={labelStyle} htmlFor="tx-fecha">Fecha</label>
+            <input
+              id="tx-fecha"
+              type="date"
+              value={formData.fecha}
+              onChange={event => set('fecha', event.target.value)}
+              required
+              style={inputStyle}
+            />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             <div style={fieldStyle}>
-              <label style={labelStyle}>Categoria</label>
+              <label style={labelStyle} htmlFor="tx-categoria">Categoría</label>
               <select
+                id="tx-categoria"
                 value={formData.categoria}
-                onChange={e => set('categoria', e.target.value)}
+                onChange={event => set('categoria', event.target.value)}
                 required
                 disabled={noCategoriesAvailable}
                 style={{ ...inputStyle, opacity: noCategoriesAvailable ? 0.65 : 1 }}
               >
                 {noCategoriesAvailable ? (
-                  <option value="">Sin categorias disponibles</option>
+                  <option value="">Sin categorías disponibles</option>
                 ) : (
                   selectableCategories.map(category => (
                     <option key={category} value={category}>
@@ -219,8 +180,13 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose
               </select>
             </div>
             <div style={fieldStyle}>
-              <label style={labelStyle}>Estado</label>
-              <select value={formData.estado_pago} onChange={e => set('estado_pago', e.target.value)} style={inputStyle}>
+              <label style={labelStyle} htmlFor="tx-estado">Estado</label>
+              <select
+                id="tx-estado"
+                value={formData.estado_pago}
+                onChange={event => set('estado_pago', event.target.value)}
+                style={inputStyle}
+              >
                 <option value="Pagado">Pagado</option>
                 <option value="Pendiente">Pendiente</option>
               </select>
@@ -228,14 +194,34 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose
           </div>
 
           <div style={fieldStyle}>
-            <label style={labelStyle}>Importe (COP)</label>
-            <input type="number" placeholder="0" min="0" value={formData.importe} onChange={e => set('importe', e.target.value)} required style={inputStyle} />
+            <label style={labelStyle} htmlFor="tx-importe">Importe (COP)</label>
+            <input
+              id="tx-importe"
+              type="number"
+              inputMode="numeric"
+              placeholder="0"
+              min="1"
+              step="1"
+              value={formData.importe}
+              onChange={event => set('importe', event.target.value)}
+              required
+              style={inputStyle}
+            />
+            {/* Confirmacion visual de la cifra: evita el cero de mas al teclear. */}
+            <span style={{ marginTop: '0.4rem', fontSize: '0.82rem', color: importeValido ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+              {importeValido ? formatCurrency(importeNumerico) : 'Escribe un monto mayor que cero'}
+            </span>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.75rem' }}>
             <div style={fieldStyle}>
-              <label style={labelStyle}>Canal</label>
-              <select value={formData.canal} onChange={e => set('canal', e.target.value)} style={inputStyle}>
+              <label style={labelStyle} htmlFor="tx-canal">Canal</label>
+              <select
+                id="tx-canal"
+                value={formData.canal}
+                onChange={event => set('canal', event.target.value)}
+                style={inputStyle}
+              >
                 {CANALES.map(channel => (
                   <option key={channel} value={channel}>
                     {channel}
@@ -244,51 +230,116 @@ const TransactionModal: React.FC<TransactionModalProps> = ({ categories, onClose
               </select>
             </div>
             <div style={fieldStyle}>
-              <label style={labelStyle}>Descripcion</label>
-              <input type="text" placeholder="Notas adicionales..." value={formData.descripcion} onChange={e => set('descripcion', e.target.value)} style={inputStyle} />
+              <label style={labelStyle} htmlFor="tx-descripcion">Descripción</label>
+              <input
+                id="tx-descripcion"
+                type="text"
+                placeholder="Notas adicionales..."
+                value={formData.descripcion}
+                onChange={event => set('descripcion', event.target.value)}
+                style={inputStyle}
+              />
             </div>
           </div>
 
           {noCategoriesAvailable && (
-            <p style={{ color: TOKEN.danger, fontSize: '0.85rem', marginTop: '-0.25rem' }}>
-              Agrega al menos una categoria en configuracion para poder guardar transacciones.
+            <p style={{ color: 'var(--danger)', fontSize: '0.85rem', marginTop: '-0.25rem' }}>
+              Agrega al menos una categoría en Configuración para poder guardar transacciones.
             </p>
           )}
 
-          <div style={{ height: '1px', backgroundColor: TOKEN.border }} />
+          <div style={{ height: '1px', backgroundColor: 'var(--border-color)' }} />
 
           <button
             type="submit"
-            disabled={loading || noCategoriesAvailable}
+            disabled={!puedeGuardar}
             style={{
               padding: '0.9rem',
-              borderRadius: TOKEN.radiusSm,
+              borderRadius: '8px',
               border: 'none',
               background: isIngreso
                 ? 'linear-gradient(90deg, #3fb950, #388bfd)'
-                : 'linear-gradient(90deg, #f85149, #bc8cff)',
+                : 'linear-gradient(90deg, #f85149, #f97316)',
               color: '#fff',
               fontSize: '0.95rem',
-              fontWeight: '700',
-              cursor: loading || noCategoriesAvailable ? 'not-allowed' : 'pointer',
-              opacity: loading || noCategoriesAvailable ? 0.7 : 1,
+              fontWeight: 700,
+              cursor: puedeGuardar ? 'pointer' : 'not-allowed',
+              opacity: puedeGuardar ? 1 : 0.6,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: '0.5rem',
-              transition: 'opacity 0.15s',
-              boxShadow: isIngreso
-                ? '0 6px 20px rgba(63,185,80,0.25)'
-                : '0 6px 20px rgba(248,81,73,0.25)',
             }}
           >
             <Save size={17} />
-            {loading ? 'Guardando...' : isEditMode ? 'Guardar cambios' : 'Guardar transaccion'}
+            {loading ? 'Guardando...' : isEditMode ? 'Guardar cambios' : 'Guardar transacción'}
           </button>
         </form>
       </div>
     </div>
   );
 };
+
+const overlayStyle: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  backgroundColor: 'rgba(0, 0, 0, 0.75)',
+  backdropFilter: 'blur(6px)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1000,
+  padding: '1rem',
+  overflowY: 'auto',
+};
+
+const cardStyle: React.CSSProperties = {
+  width: '100%',
+  maxWidth: '480px',
+  backgroundColor: 'var(--bg-secondary)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 'var(--border-radius)',
+  padding: '2rem',
+  boxShadow: 'var(--shadow-md)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '1.5rem',
+  margin: 'auto',
+};
+
+const closeBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  color: 'var(--text-secondary)',
+  display: 'flex',
+  alignItems: 'center',
+  padding: '4px',
+  borderRadius: '6px',
+};
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '0.65rem 0.85rem',
+  backgroundColor: 'var(--bg-primary)',
+  border: '1px solid var(--border-color)',
+  borderRadius: '8px',
+  color: 'var(--text-primary)',
+  fontSize: '0.9rem',
+  outline: 'none',
+  colorScheme: 'dark',
+};
+
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: '0.78rem',
+  fontWeight: 600,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--text-secondary)',
+  marginBottom: '0.4rem',
+};
+
+const fieldStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column' };
 
 export default TransactionModal;

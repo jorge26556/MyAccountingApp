@@ -1,36 +1,34 @@
 import React from 'react';
+import { NavLink } from 'react-router-dom';
 import { Home, List, Settings } from 'lucide-react';
-import type { AppView } from '../types';
 
-interface TopNavProps {
-  activeView: AppView;
-  onChangeView: (view: AppView) => void;
-}
+/**
+ * Antes la navegacion era un useState: recargar la pagina te devolvia al
+ * dashboard, el boton "atras" del navegador te sacaba de la app y no se podia
+ * compartir un enlace a una vista concreta. Ahora son rutas reales.
+ */
+const ITEMS = [
+  { to: '/', label: 'Inicio', icon: <Home size={16} />, end: true },
+  { to: '/transacciones', label: 'Transacciones', icon: <List size={16} />, end: false },
+  { to: '/configuracion', label: 'Configuración', icon: <Settings size={16} />, end: false },
+];
 
-const TopNav: React.FC<TopNavProps> = ({ activeView, onChangeView }) => {
-  const items: Array<{ id: AppView; label: string; icon: React.ReactNode }> = [
-    { id: 'dashboard', label: 'Inicio', icon: <Home size={16} /> },
-    { id: 'transactions', label: 'Transacciones', icon: <List size={16} /> },
-    { id: 'settings', label: 'Configuracion', icon: <Settings size={16} /> },
-  ];
-
-  return (
-    <nav className="top-nav">
-      <div className="top-nav__inner">
-        {items.map(item => (
-          <button
-            key={item.id}
-            type="button"
-            className={`top-nav__item ${activeView === item.id ? 'is-active' : ''}`}
-            onClick={() => onChangeView(item.id)}
-          >
-            {item.icon}
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
-};
+const TopNav: React.FC = () => (
+  <nav className="top-nav">
+    <div className="top-nav__inner">
+      {ITEMS.map(item => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          className={({ isActive }) => `top-nav__item ${isActive ? 'is-active' : ''}`}
+        >
+          {item.icon}
+          <span>{item.label}</span>
+        </NavLink>
+      ))}
+    </div>
+  </nav>
+);
 
 export default TopNav;

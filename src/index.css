@@ -522,3 +522,245 @@ button:disabled {
     display: none;
   }
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Componentes agregados en la revision de 2026-08
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* TopNav ahora usa <NavLink>, que renderiza un <a> con subrayado por defecto. */
+.top-nav__item {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.error-banner {
+  justify-content: flex-start;
+}
+
+.error-banner span {
+  flex: 1;
+}
+
+/* ── Toasts ── */
+.toast-stack {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: min(380px, calc(100vw - 2.5rem));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  font-size: 0.9rem;
+  pointer-events: auto;
+  animation: toast-in 0.18s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+
+.toast--success {
+  border-color: rgba(63, 185, 80, 0.45);
+}
+.toast--success .toast__icon {
+  color: var(--success);
+}
+
+.toast--error {
+  border-color: rgba(248, 81, 73, 0.45);
+}
+.toast--error .toast__icon {
+  color: var(--danger);
+}
+
+.toast--info .toast__icon {
+  color: var(--accent-primary);
+}
+
+.toast__icon {
+  display: flex;
+  padding-top: 1px;
+}
+
+.toast__message {
+  flex: 1;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.toast__close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+}
+
+.toast__close:hover {
+  color: var(--text-primary);
+}
+
+/* ── Selector de periodo ── */
+.period-selector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.period-selector__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.period-selector__range {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.period-selector__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* ── Metas de ahorro ── */
+.goals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+
+.goal-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+
+.goal-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.goal-item__bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.goal-item__fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .goal-item__fill {
+    transition: none;
+  }
+}
+
+.goal-item__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+/* ── Charts ── */
+.chart-title {
+  margin-bottom: 0.35rem;
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.chart-caption {
+  margin-bottom: 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.heatmap-cell {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  cursor: help;
+  transition: transform 0.15s ease;
+}
+
+.heatmap-cell:hover {
+  transform: scale(1.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heatmap-cell {
+    transition: none;
+  }
+}
+
+.kpi-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+/* ── Movil ── */
+@media (max-width: 620px) {
+  .toast-stack {
+    left: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+    max-width: none;
+  }
+
+  .period-selector {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .goals-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .heatmap-cell {
+    width: 12px;
+    height: 12px;
+  }
+}

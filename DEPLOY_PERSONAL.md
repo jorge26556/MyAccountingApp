@@ -1,79 +1,96 @@
-# Deploy personal en Vercel
+# Operación y despliegue
 
-## 1. Reclamar el deployment
+## Despliegue
 
-Abre este enlace con tu cuenta de Vercel:
+Vercel está conectado al repositorio: cada push a `main` construye y publica.
+No hay pasos manuales.
 
-- https://vercel.com/claim-deployment?code=3a98b204-a733-4dfb-9813-536474e93479
+- Proyecto Vercel: `skill-deploy-goevus63eu`
+- URL: https://skill-deploy-goevus63eu.vercel.app
+- Proyecto Supabase: `MyContabilidadApp` (`hfwvanvrbbreefhnwxzy`, us-east-2)
 
-Preview actual:
-
-- https://skill-deploy-goevus63eu-codex-agent-deploys.vercel.app
-
-## 2. Crear o vincular el proyecto en Vercel
-
-Cuando reclames el deployment, Vercel te dejara asociarlo a tu cuenta. Si te ofrece crear un proyecto nuevo, usa uno con un nombre como:
-
-- my-accounting-app
-
-## 3. Configurar variables de entorno
-
-En Vercel, entra a:
-
-- Project Settings
-- Environment Variables
-
-Crea estas variables:
+Variables de entorno en Vercel (Project Settings → Environment Variables):
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 
-Usa los valores que tienes localmente en [`.env.local`](C:/Users/dinod/Documents/Projects2026/MyAccountingApp/.env.local).
+Los valores están en `.env.local`, que no se versiona.
 
-Tambien tienes el formato de ejemplo en [`.env.example`](C:/Users/dinod/Documents/Projects2026/MyAccountingApp/.env.example).
+## Antes de cada push
 
-## 4. Hacer redeploy
+```bash
+npm run check
+```
 
-Despues de guardar las variables:
+Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 
-- entra a la pesta�a `Deployments`
-- abre el ultimo deployment
-- usa la opcion `Redeploy`
+## Ajustes pendientes en el panel de Supabase
 
-Esto hara que la app construya usando las variables correctas de Supabase.
+Estos no se pueden hacer por SQL ni por migración; hay que entrar al panel.
 
-## 5. Verificar acceso a Supabase
+### 1. Cerrar el registro público (recomendado mientras sea de uso personal)
 
-La app usa estas variables desde [`src/lib/supabase.ts`](C:/Users/dinod/Documents/Projects2026/MyAccountingApp/src/lib/supabase.ts).
+**Authentication → Sign In / Providers → Email → "Allow new users to sign up": off**
 
-Si algo falla al abrir la app publicada, revisa:
+Hoy cualquiera que abra la URL puede crear una cuenta y consumir la cuota del
+proyecto. Con esto apagado, los usuarios se crean a mano desde
+**Authentication → Users → Add user**.
 
-- que `VITE_SUPABASE_URL` este bien escrita
-- que `VITE_SUPABASE_ANON_KEY` sea la publishable key correcta
-- que Supabase permita acceso desde el dominio de Vercel
+### 2. Activar protección de contraseñas filtradas
 
-## 6. Tabla de categorias
+**Authentication → Policies → "Leaked password protection": on**
 
-Para que la configuracion de categorias quede persistida en Supabase, ejecuta este script SQL en el editor SQL de tu proyecto Supabase:
+Contrasta la contraseña contra HaveIBeenPwned al registrarse o cambiarla.
+El linter de seguridad de Supabase lo reporta mientras esté apagado.
 
-- [supabase/categories.sql](C:/Users/dinod/Documents/Projects2026/MyAccountingApp/supabase/categories.sql)
+### 3. Confirmación de correo
 
-## 7. Flujo recomendado para esta etapa
+Actualmente está **desactivada**: `signUp` devuelve sesión de inmediato. Era lo
+que compensaba el hack de auto-confirmación del antiguo RPC `create_user_profile`,
+que ya se eliminó. Si más adelante quieres exigir verificación de correo:
 
-Mientras la usas solo tu:
+**Authentication → Sign In / Providers → Email → "Confirm email": on**
 
-- mantela en Vercel Hobby
-- usa URL preview o dominio gratuito de Vercel
-- prueba crear, editar y filtrar transacciones
-- valida el modulo de configuracion y los charts
+Ten en cuenta que el SMTP por defecto de Supabase tiene límites bajos de envío;
+para uso real conviene configurar un SMTP propio.
 
-## 8. Cuando quieras publicarla al publico
+### 4. URLs de redirección
 
-Mas adelante conviene hacer esto antes de venderla:
+Para que el enlace de recuperación de contraseña funcione en producción:
 
-- dominio propio
-- branding final
-- politicas y terminos
-- separacion de entornos `dev` y `prod`
-- revisar limites del plan y costos
-- fortalecer reglas y tablas en Supabase
+**Authentication → URL Configuration → Redirect URLs**, agregar la URL del
+despliegue de Vercel.
+
+## Revisión periódica de seguridad
+
+```sql
+-- Todas deben tener rowsecurity = true
+select tablename, rowsecurity from pg_tables where schemaname = 'public';
+
+-- Ninguna debe tener qual = 'true' ni el rol 'public'
+select tablename, policyname, roles::text, cmd, qual
+  from pg_policies where schemaname = 'public' order by tablename;
+
+-- Ninguna función SECURITY DEFINER debe ser ejecutable por anon
+select p.proname, has_function_privilege('anon', p.oid, 'EXECUTE') as anon_puede
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.prosecdef;
+```
+
+Y la comprobación de caja negra, sin sesión — las cuatro deben devolver `[]`:
+
+```bash
+for t in profiles transactions categories savings_goals; do
+  curl -s "$VITE_SUPABASE_URL/rest/v1/$t?select=*&limit=1" -H "apikey: $VITE_SUPABASE_ANON_KEY"
+done
+```
+
+## Si quieres compartirla con otras personas
+
+Pendientes antes de abrirla:
+
+- dominio propio y branding final
+- separar entornos `dev` y `prod` (dos proyectos de Supabase)
+- política de privacidad y términos
+- opción de eliminar la cuenta desde la app
+- revisar límites y costos del plan gratuito

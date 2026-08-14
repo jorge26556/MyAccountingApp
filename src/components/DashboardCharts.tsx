@@ -1,3 +1,4 @@
+import React, { useMemo } from 'react';
 import {
   Area,
   AreaChart,
@@ -13,156 +14,166 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { eachDayOfInterval, format, startOfDay, subDays } from 'date-fns';
+import { eachDayOfInterval, format, subDays } from 'date-fns';
 import { es } from 'date-fns/locale';
 
 import type { Transaction } from '../types';
+import { formatCurrency, formatCurrencyCompact } from '../lib/format';
+import { toDateString, today } from '../lib/dates';
 
 interface DashboardChartsProps {
   data: Transaction[];
+  rango: { desde: Date | null; hasta: Date | null };
 }
 
 const COLORS = ['#58a6ff', '#f97316', '#3fb950', '#bc8cff', '#d29922', '#388bfd'];
 
-const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
-  const formatCurrency = (value: number) => new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    maximumFractionDigits: 0,
-  }).format(value);
+/** El heatmap se limita a 366 celdas: mas alla deja de ser legible. */
+const MAX_HEATMAP_DIAS = 366;
 
-  const timelineMap = new Map<string, { fecha: string; ingresos: number; gastos: number; neto: number }>();
-  data
-    .slice()
-    .sort((a, b) => a.fecha.getTime() - b.fecha.getTime())
-    .forEach(item => {
-      const key = format(item.fecha, 'yyyy-MM-dd');
-      const current = timelineMap.get(key) ?? {
+const tooltipStyle: React.CSSProperties = {
+  backgroundColor: 'var(--bg-secondary)',
+  borderColor: 'var(--border-color)',
+  borderRadius: '8px',
+};
+
+const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
+  /**
+   * Todo el derivado va dentro de un useMemo. Antes se recalculaba entero en
+   * cada render del padre, incluyendo el recorrido completo de transacciones
+   * cuatro veces y la construccion del heatmap.
+   */
+  const charts = useMemo(() => {
+    const timelineMap = new Map<
+      string,
+      { fecha: string; ingresos: number; gastos: number; neto: number }
+    >();
+    const monthlyMap = new Map<
+      string,
+      { month: string; sortKey: string; ingresos: number; gastos: number }
+    >();
+    const expenseCategoryMap = new Map<string, number>();
+    const incomeCategoryMap = new Map<string, number>();
+    const channelMap = new Map<string, { ingresos: number; gastos: number }>();
+    const dailyExpensesMap = new Map<string, number>();
+
+    const ordenados = [...data].sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
+
+    ordenados.forEach(item => {
+      const dayKey = toDateString(item.fecha);
+      const monthKey = dayKey.slice(0, 7);
+      const monto = Math.abs(item.importe);
+      const esIngreso = item.tipo === 'Ingreso';
+
+      const dia = timelineMap.get(dayKey) ?? {
         fecha: format(item.fecha, 'dd MMM', { locale: es }),
         ingresos: 0,
         gastos: 0,
         neto: 0,
       };
-
-      if (item.tipo === 'Ingreso') {
-        current.ingresos += item.importe;
-        current.neto += item.importe;
+      if (esIngreso) {
+        dia.ingresos += monto;
+        dia.neto += monto;
       } else {
-        const gasto = Math.abs(item.importe);
-        current.gastos += gasto;
-        current.neto -= gasto;
+        dia.gastos += monto;
+        dia.neto -= monto;
+      }
+      timelineMap.set(dayKey, dia);
+
+      const displayMonth = format(item.fecha, 'MMM yyyy', { locale: es });
+      const mes = monthlyMap.get(monthKey) ?? {
+        month: displayMonth.charAt(0).toUpperCase() + displayMonth.slice(1),
+        sortKey: monthKey,
+        ingresos: 0,
+        gastos: 0,
+      };
+      if (esIngreso) mes.ingresos += monto;
+      else mes.gastos += monto;
+      monthlyMap.set(monthKey, mes);
+
+      if (esIngreso) {
+        incomeCategoryMap.set(item.categoria, (incomeCategoryMap.get(item.categoria) ?? 0) + monto);
+      } else {
+        expenseCategoryMap.set(item.categoria, (expenseCategoryMap.get(item.categoria) ?? 0) + monto);
+        dailyExpensesMap.set(dayKey, (dailyExpensesMap.get(dayKey) ?? 0) + monto);
       }
 
-      timelineMap.set(key, current);
+      const canal = channelMap.get(item.canal) ?? { ingresos: 0, gastos: 0 };
+      if (esIngreso) canal.ingresos += monto;
+      else canal.gastos += monto;
+      channelMap.set(item.canal, canal);
     });
 
-  const timelineData = Array.from(timelineMap.values());
+    const timelineData = Array.from(timelineMap.values());
 
-  let acumulado = 0;
-  const cumulativeData = timelineData.map(item => {
-    acumulado += item.neto;
-    return { ...item, acumulado };
-  });
+    let acumulado = 0;
+    const cumulativeData = timelineData.map(item => {
+      acumulado += item.neto;
+      return { ...item, acumulado };
+    });
 
-  const today = startOfDay(new Date());
-  const startDate = subDays(today, 89);
-  const daysRange = eachDayOfInterval({ start: startDate, end: today });
+    // El heatmap sigue el periodo elegido en vez de estar clavado a 90 dias.
+    const hoy = today();
+    const heatmapHasta = rango.hasta && rango.hasta < hoy ? rango.hasta : hoy;
+    let heatmapDesde = rango.desde ?? subDays(heatmapHasta, 89);
+    const spanDias = Math.round((heatmapHasta.getTime() - heatmapDesde.getTime()) / 86_400_000);
+    if (spanDias > MAX_HEATMAP_DIAS) {
+      heatmapDesde = subDays(heatmapHasta, MAX_HEATMAP_DIAS - 1);
+    }
+    if (heatmapDesde > heatmapHasta) heatmapDesde = heatmapHasta;
 
-  const monthlyMap = new Map<string, { month: string; sortKey: string; ingresos: number; gastos: number }>();
-  
-  const expenseCategoryMap = new Map<string, number>();
-  const incomeCategoryMap = new Map<string, number>();
-  const channelMap = new Map<string, { ingresos: number; gastos: number }>();
+    const maxExpense = Math.max(...Array.from(dailyExpensesMap.values()), 1);
+    const heatmapData = eachDayOfInterval({ start: heatmapDesde, end: heatmapHasta }).map(date => {
+      const key = toDateString(date);
+      const amount = dailyExpensesMap.get(key) ?? 0;
+      let intensity = amount / maxExpense;
+      if (amount > 0 && intensity < 0.2) intensity = 0.2;
+      return { date, key, amount, intensity };
+    });
 
-  data.forEach(item => {
-    // Agrupacion mensual
-    const monthKey = format(item.fecha, 'yyyy-MM');
-    const displayMonth = format(item.fecha, 'MMM yyyy', { locale: es });
-    
-    const currentMonth = monthlyMap.get(monthKey) ?? {
-      month: displayMonth.charAt(0).toUpperCase() + displayMonth.slice(1),
-      sortKey: monthKey,
-      ingresos: 0,
-      gastos: 0
+    return {
+      timelineData,
+      cumulativeData,
+      monthlyData: Array.from(monthlyMap.values()).sort((a, b) => a.sortKey.localeCompare(b.sortKey)),
+      expenseCategoryData: Array.from(expenseCategoryMap.entries())
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 6),
+      incomeCategoryData: Array.from(incomeCategoryMap.entries())
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 6),
+      channelData: Array.from(channelMap.entries())
+        .map(([name, values]) => ({ name, ...values }))
+        .sort((a, b) => b.ingresos + b.gastos - (a.ingresos + a.gastos)),
+      heatmapData,
     };
-
-    if (item.tipo === 'Ingreso') {
-      currentMonth.ingresos += item.importe;
-    } else {
-      currentMonth.gastos += Math.abs(item.importe);
-    }
-    
-    monthlyMap.set(monthKey, currentMonth);
-
-    // Agrupacion por categorias y canales
-    if (item.tipo === 'Gasto') {
-      expenseCategoryMap.set(item.categoria, (expenseCategoryMap.get(item.categoria) ?? 0) + Math.abs(item.importe));
-    } else {
-      incomeCategoryMap.set(item.categoria, (incomeCategoryMap.get(item.categoria) ?? 0) + item.importe);
-    }
-
-    const currentChannel = channelMap.get(item.canal) ?? { ingresos: 0, gastos: 0 };
-    if (item.tipo === 'Ingreso') {
-      currentChannel.ingresos += item.importe;
-    } else {
-      currentChannel.gastos += Math.abs(item.importe);
-    }
-    channelMap.set(item.canal, currentChannel);
-  });
-
-  const monthlyData = Array.from(monthlyMap.values())
-    .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-
-  const expenseCategoryData = Array.from(expenseCategoryMap.entries())
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 6);
-
-  const incomeCategoryData = Array.from(incomeCategoryMap.entries())
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
-
-  const channelData = Array.from(channelMap.entries())
-    .map(([name, values]) => ({ name, ...values }))
-    .sort((a, b) => (b.ingresos + b.gastos) - (a.ingresos + a.gastos));
-
-  const dailyExpensesMap = new Map<string, number>();
-  data.forEach(item => {
-    if (item.tipo === 'Gasto') {
-      const key = format(item.fecha, 'yyyy-MM-dd');
-      dailyExpensesMap.set(key, (dailyExpensesMap.get(key) ?? 0) + Math.abs(item.importe));
-    }
-  });
-
-  const maxExpense = Math.max(...Array.from(dailyExpensesMap.values()), 1);
-
-  const heatmapData = daysRange.map(date => {
-    const key = format(date, 'yyyy-MM-dd');
-    const amount = dailyExpensesMap.get(key) ?? 0;
-    let intensity = amount / maxExpense;
-    // ensure even small expenses are visible
-    if (amount > 0 && intensity < 0.2) intensity = 0.2; 
-    return { date, key, amount, intensity };
-  });
+  }, [data, rango]);
 
   if (data.length === 0) {
     return (
-      <div className="card" style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
-        Aun no hay suficientes datos para mostrar analitica visual.
+      <div className="card" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2.5rem' }}>
+        Aún no hay datos en este periodo para mostrar analítica visual.
       </div>
     );
   }
 
+  const ejeY = {
+    stroke: 'var(--text-secondary)',
+    tickLine: false,
+    axisLine: false,
+    tickFormatter: (value: number | string) => formatCurrencyCompact(Number(value)),
+    width: 80,
+  };
+
   return (
     <div className="charts-grid">
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Flujo de caja en el tiempo</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Compara lo que entro, lo que salio y el balance neto por fecha.
-        </p>
+        <h4 className="chart-title">Flujo de caja en el tiempo</h4>
+        <p className="chart-caption">Compara lo que entró, lo que salió y el balance neto por fecha.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={timelineData}>
+            <AreaChart data={charts.timelineData}>
               <defs>
                 <linearGradient id="incomeFill" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3fb950" stopOpacity={0.28} />
@@ -174,12 +185,9 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-              <XAxis dataKey="fecha" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-              <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={value => formatCurrency(Number(value)).replace(',00', '')} width={100} />
-              <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
-                formatter={value => formatCurrency(Number(value))}
-              />
+              <XAxis dataKey="fecha" stroke="var(--text-secondary)" tickLine={false} axisLine={false} minTickGap={24} />
+              <YAxis {...ejeY} />
+              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
               <Legend wrapperStyle={{ paddingTop: '20px' }} />
               <Area type="monotone" dataKey="ingresos" name="Ingresos" stroke="#3fb950" fill="url(#incomeFill)" strokeWidth={2} />
               <Area type="monotone" dataKey="gastos" name="Gastos" stroke="#f85149" fill="url(#expenseFill)" strokeWidth={2} />
@@ -190,13 +198,11 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
       </div>
 
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Ahorro Acumulado</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          La trayectoria de tu capital en el tiempo.
-        </p>
+        <h4 className="chart-title">Ahorro acumulado</h4>
+        <p className="chart-caption">La trayectoria de tu capital dentro del periodo.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={cumulativeData}>
+            <AreaChart data={charts.cumulativeData}>
               <defs>
                 <linearGradient id="accFill" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#3fb950" stopOpacity={0.28} />
@@ -204,31 +210,26 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-              <XAxis dataKey="fecha" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-              <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={value => formatCurrency(Number(value)).replace(',00', '')} width={100} />
-              <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
-                formatter={value => formatCurrency(Number(value))}
-              />
-              <Area type="monotone" dataKey="acumulado" name="Capital Total" stroke="#3fb950" fill="url(#accFill)" strokeWidth={3} />
+              <XAxis dataKey="fecha" stroke="var(--text-secondary)" tickLine={false} axisLine={false} minTickGap={24} />
+              <YAxis {...ejeY} />
+              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
+              <Area type="monotone" dataKey="acumulado" name="Capital acumulado" stroke="#3fb950" fill="url(#accFill)" strokeWidth={3} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Resumen Mensual</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Tus ingresos y gastos totales agrupados por cada mes.
-        </p>
+        <h4 className="chart-title">Resumen mensual</h4>
+        <p className="chart-caption">Ingresos y gastos totales agrupados por mes.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={monthlyData}>
+            <BarChart data={charts.monthlyData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
               <XAxis dataKey="month" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-              <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={value => formatCurrency(Number(value)).replace(',00', '')} width={100} />
+              <YAxis {...ejeY} />
               <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
+                contentStyle={tooltipStyle}
                 formatter={value => formatCurrency(Number(value))}
                 cursor={{ fill: 'var(--bg-secondary)', opacity: 0.4 }}
               />
@@ -241,18 +242,16 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
       </div>
 
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Top categorias de gasto</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Muestra en que categorias se esta yendo mas dinero.
-        </p>
+        <h4 className="chart-title">Top categorías de gasto</h4>
+        <p className="chart-caption">En qué categorías se está yendo más dinero.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={expenseCategoryData} layout="vertical" margin={{ left: 8, right: 12 }}>
+            <BarChart data={charts.expenseCategoryData} layout="vertical" margin={{ left: 8, right: 12 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" horizontal={false} />
               <XAxis type="number" hide />
               <YAxis dataKey="name" type="category" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={100} />
               <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                contentStyle={tooltipStyle}
                 formatter={value => formatCurrency(Number(value))}
                 cursor={{ fill: 'var(--bg-secondary)', opacity: 0.4 }}
               />
@@ -263,15 +262,13 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
       </div>
 
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Distribucion de gastos</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Representacion porcentual de en que gastas mas dinero.
-        </p>
+        <h4 className="chart-title">Distribución de gastos</h4>
+        <p className="chart-caption">Peso porcentual de cada categoría sobre el total gastado.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
-                data={expenseCategoryData}
+                data={charts.expenseCategoryData}
                 dataKey="value"
                 nameKey="name"
                 cx="50%"
@@ -281,32 +278,25 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 paddingAngle={4}
                 label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                 labelLine={false}
-                fill="var(--text-primary)"
               >
-                {expenseCategoryData.map((_, index) => (
-                  <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                {charts.expenseCategoryData.map((entry, index) => (
+                  <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
-                itemStyle={{ color: 'var(--text-primary)' }}
-                formatter={value => formatCurrency(Number(value))}
-              />
+              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
             </PieChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Distribucion de ingresos</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Ayuda a identificar de donde vienen mas ingresos.
-        </p>
+        <h4 className="chart-title">Distribución de ingresos</h4>
+        <p className="chart-caption">De dónde viene tu dinero.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
-                data={incomeCategoryData}
+                data={charts.incomeCategoryData}
                 dataKey="value"
                 nameKey="name"
                 cx="50%"
@@ -315,15 +305,11 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
                 outerRadius={100}
                 paddingAngle={4}
               >
-                {incomeCategoryData.map((_, index) => (
-                  <Cell key={index} fill={COLORS[index % COLORS.length]} />
+                {charts.incomeCategoryData.map((entry, index) => (
+                  <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
-                itemStyle={{ color: 'var(--text-primary)' }}
-                formatter={value => formatCurrency(Number(value))}
-              />
+              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
               <Legend verticalAlign="bottom" height={36} />
             </PieChart>
           </ResponsiveContainer>
@@ -331,20 +317,15 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
       </div>
 
       <div className="card">
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Movimiento por canal</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Compara por cada canal cuanto ingreso y cuanto gasto se movio.
-        </p>
+        <h4 className="chart-title">Movimiento por canal</h4>
+        <p className="chart-caption">Cuánto entró y salió por cada medio de pago.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={channelData}>
+            <BarChart data={charts.channelData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
               <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-              <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} tickFormatter={value => formatCurrency(Number(value)).replace(',00', '')} width={110} />
-              <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
-                formatter={value => formatCurrency(Number(value))}
-              />
+              <YAxis {...ejeY} />
+              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
               <Legend />
               <Bar dataKey="ingresos" name="Ingresos" fill="#3fb950" radius={[8, 8, 0, 0]} />
               <Bar dataKey="gastos" name="Gastos" fill="#f85149" radius={[8, 8, 0, 0]} />
@@ -354,30 +335,24 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data }) => {
       </div>
 
       <div className="card" style={{ gridColumn: '1 / -1' }}>
-        <h4 style={{ marginBottom: '1.5rem', color: 'var(--text-secondary)' }}>Heatmap (Actividad de gastos ultimos 90 dias)</h4>
-        <p style={{ marginBottom: '1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Diferencia la intensidad de lo que has estado gastando dia tras dia.
+        <h4 className="chart-title">Actividad de gasto día a día</h4>
+        <p className="chart-caption">
+          Cada celda es un día del periodo: mientras más intensa, más gastaste ese día.
         </p>
         <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-          {heatmapData.map(day => {
-            const opacity = day.amount > 0 ? 0.2 + (day.intensity * 0.8) : 0.05;
-            return (
-              <div 
-                key={day.key} 
-                title={`${format(day.date, 'dd MMM yyyy', { locale: es })}: ${formatCurrency(day.amount)}`}
-                style={{ 
-                  width: '16px', 
-                  height: '16px', 
-                  backgroundColor: day.amount > 0 ? `rgba(248, 81, 73, ${opacity})` : 'var(--bg-tertiary)',
-                  borderRadius: '4px',
-                  cursor: 'help',
-                  transition: 'transform 0.2s',
-                }}
-                onMouseOver={e => e.currentTarget.style.transform = 'scale(1.3)'}
-                onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
-              />
-            );
-          })}
+          {charts.heatmapData.map(day => (
+            <div
+              key={day.key}
+              title={`${format(day.date, 'dd MMM yyyy', { locale: es })}: ${formatCurrency(day.amount)}`}
+              className="heatmap-cell"
+              style={{
+                backgroundColor:
+                  day.amount > 0
+                    ? `rgba(248, 81, 73, ${0.2 + day.intensity * 0.8})`
+                    : 'var(--bg-tertiary)',
+              }}
+            />
+          ))}
         </div>
       </div>
     </div>
