@@ -5,12 +5,10 @@ import {
   Activity,
   AlertCircle,
   DollarSign,
-  LogOut,
   Plus,
   Target,
   TrendingDown,
   TrendingUp,
-  User,
 } from 'lucide-react';
 
 import FiltersBar from './components/FiltersBar';
@@ -21,6 +19,7 @@ import TopNav from './components/TopNav';
 import TransactionModal from './components/TransactionModal';
 import TransactionsTable from './components/TransactionsTable';
 import GoalsPanel from './components/GoalsPanel';
+import AccountMenu from './components/AccountMenu';
 
 // recharts pesa mas que todo el resto de la app junta. Cargarlo aparte deja que
 // las vistas de transacciones y configuracion no lo descarguen nunca.
@@ -33,6 +32,8 @@ import { supabase } from './lib/supabase';
 import { applyFilters, computeKpis, previousPeriod, resolvePeriod } from './lib/kpis';
 import { EMPTY_FILTERS } from './lib/filters';
 import { formatCurrency, formatPercent } from './lib/format';
+import { downloadCsv } from './lib/csv';
+import { toDateString, today } from './lib/dates';
 import {
   createCategory,
   createSavingsGoal,
@@ -49,6 +50,12 @@ import {
 } from './services/api';
 import type { Category, DashboardFilters, SavingsGoal, Transaction } from './types';
 
+type ModalState =
+  | null
+  | { mode: 'create' }
+  | { mode: 'edit'; tx: Transaction }
+  | { mode: 'repeat'; tx: Transaction };
+
 const App: React.FC = () => {
   const toast = useToast();
   const navigate = useNavigate();
@@ -63,7 +70,12 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [modalState, setModalState] = useState<null | 'create' | Transaction>(null);
+  /**
+   * `repeat` copia los datos de un movimiento existente pero crea uno nuevo.
+   * Antes el estado era `null | 'create' | Transaction`, que no podia expresar
+   * "es una copia, no una edicion".
+   */
+  const [modalState, setModalState] = useState<ModalState>(null);
   const [filters, setFilters] = useState<DashboardFilters>(EMPTY_FILTERS);
 
   /* ─────────────────────────────── sesion ─────────────────────────────── */
@@ -172,14 +184,14 @@ const App: React.FC = () => {
   const handleSaveTransaction = async (payload: Omit<Transaction, 'id' | 'user_id'>) => {
     // Actualizacion puntual del array en vez de recargar las tres tablas
     // completas en cada guardado.
-    if (modalState && modalState !== 'create') {
-      const updated = await updateTransaction(modalState.id, payload);
+    if (modalState?.mode === 'edit') {
+      const updated = await updateTransaction(modalState.tx.id, payload);
       setData(prev => prev.map(item => (item.id === updated.id ? updated : item)));
-      toast.success('Transacción actualizada');
+      toast.success('Movimiento actualizado');
     } else {
       const created = await createTransaction(payload);
       setData(prev => [created, ...prev]);
-      toast.success('Transacción guardada');
+      toast.success('Movimiento guardado');
     }
   };
 
@@ -241,6 +253,18 @@ const App: React.FC = () => {
     navigate('/');
   };
 
+  const openCreate = () => setModalState({ mode: 'create' });
+
+  /** Respaldo rapido desde el menu de cuenta, sin pasar por Configuración. */
+  const handleExport = () => {
+    if (data.length === 0) {
+      toast.info('Todavía no hay movimientos para exportar');
+      return;
+    }
+    downloadCsv(data, `mis-finanzas-${toDateString(today())}.csv`);
+    toast.success(`${data.length} movimientos exportados`);
+  };
+
   /* ────────────────────────────── render ──────────────────────────────── */
 
   if (!authReady) {
@@ -294,7 +318,22 @@ const App: React.FC = () => {
 
       {filtersBar}
 
-      <div className="dashboard-kpi-grid">
+      {/* El balance es la respuesta a "¿cómo voy?". Antes competia de igual a
+          igual con otras ocho tarjetas del mismo tamaño. */}
+      <div className={`balance-hero ${kpis.beneficioNeto >= 0 ? 'is-positive' : 'is-negative'}`}>
+        <span className="balance-hero__label">Balance del periodo</span>
+        <strong className="balance-hero__value">{formatCurrency(kpis.beneficioNeto)}</strong>
+        <div className="balance-hero__meta">
+          <span>{kpis.beneficioNeto >= 0 ? 'Estás ahorrando' : 'Estás gastando de más'}</span>
+          {kpis.tieneComparativo && (
+            <span className="balance-hero__delta">
+              {formatPercent(kpis.variacionAhorro)} vs periodo anterior
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="kpi-grid">
         <KpiCard
           title="Ingresos"
           value={formatCurrency(kpis.totalIngresos)}
@@ -302,8 +341,8 @@ const App: React.FC = () => {
           color="var(--success)"
           subtitle={
             kpis.ingresosPendientes > 0
-              ? `+ ${formatCurrency(kpis.ingresosPendientes)} pendientes`
-              : 'Solo movimientos pagados'
+              ? `+${formatCurrency(kpis.ingresosPendientes)} por cobrar`
+              : undefined
           }
         />
         <KpiCard
@@ -313,66 +352,61 @@ const App: React.FC = () => {
           color="var(--danger)"
           subtitle={
             kpis.gastosPendientes > 0
-              ? `+ ${formatCurrency(kpis.gastosPendientes)} pendientes`
-              : 'Solo movimientos pagados'
+              ? `+${formatCurrency(kpis.gastosPendientes)} por pagar`
+              : undefined
           }
-        />
-        <KpiCard
-          title="Balance del periodo"
-          value={formatCurrency(kpis.beneficioNeto)}
-          icon={DollarSign}
-          color={kpis.beneficioNeto >= 0 ? 'var(--success)' : 'var(--danger)'}
-          isPositive={kpis.beneficioNeto >= 0}
-          subtitle={kpis.beneficioNeto >= 0 ? 'Estás ahorrando' : 'Estás gastando de más'}
-        />
-        <KpiCard
-          title="Variación vs periodo anterior"
-          value={kpis.tieneComparativo ? formatPercent(kpis.variacionAhorro) : '—'}
-          icon={Target}
-          color={kpis.variacionAhorro >= 0 ? 'var(--success)' : 'var(--danger)'}
-          isPositive={kpis.tieneComparativo ? kpis.variacionAhorro >= 0 : undefined}
-          subtitle={
-            kpis.tieneComparativo
-              ? `Antes: ${formatCurrency(kpis.ahorroPeriodoAnterior)}`
-              : 'Sin datos previos para comparar'
-          }
-        />
-        <KpiCard
-          title="Transacciones"
-          value={String(kpis.numOperaciones)}
-          icon={Activity}
-          color="var(--accent-secondary)"
-          subtitle="Registros en el periodo"
-        />
-        <KpiCard
-          title="Ticket medio de gasto"
-          value={formatCurrency(kpis.ticketMedioGasto)}
-          icon={Activity}
-          color="var(--info)"
-          subtitle="Promedio por pago"
         />
         <KpiCard
           title="Promedio diario"
           value={formatCurrency(kpis.gastoPromedioDiario)}
-          icon={TrendingDown}
-          color="var(--danger)"
-          subtitle="Gasto medio por día"
-        />
-        <KpiCard
-          title="Mayor categoría de gasto"
-          value={kpis.categoriaMasGasto.nombre}
-          icon={Target}
-          color="var(--warning)"
-          subtitle={formatCurrency(kpis.categoriaMasGasto.monto)}
-        />
-        <KpiCard
-          title="Mayor gasto individual"
-          value={formatCurrency(kpis.mayorGastoIndividual)}
           icon={Activity}
-          color="var(--danger)"
-          subtitle="En este periodo"
+          color="var(--info)"
+          subtitle="De gasto"
+        />
+        <KpiCard
+          title="Movimientos"
+          value={String(kpis.numOperaciones)}
+          icon={Activity}
+          color="var(--accent-secondary)"
+          subtitle="En el periodo"
         />
       </div>
+
+      {/* Los KPIs de detalle quedan detras de un toggle: se consultan de vez en
+          cuando y ocupaban media pantalla de celular cada vez. */}
+      <details className="kpi-more">
+        <summary>Ver más métricas</summary>
+        <div className="kpi-grid">
+          <KpiCard
+            title="Ticket medio"
+            value={formatCurrency(kpis.ticketMedioGasto)}
+            icon={Activity}
+            color="var(--info)"
+            subtitle="Promedio por gasto"
+          />
+          <KpiCard
+            title="Mayor categoría"
+            value={kpis.categoriaMasGasto.nombre}
+            icon={Target}
+            color="var(--warning)"
+            subtitle={formatCurrency(kpis.categoriaMasGasto.monto)}
+          />
+          <KpiCard
+            title="Mayor gasto"
+            value={formatCurrency(kpis.mayorGastoIndividual)}
+            icon={TrendingDown}
+            color="var(--danger)"
+            subtitle="Individual"
+          />
+          <KpiCard
+            title="Periodo anterior"
+            value={kpis.tieneComparativo ? formatCurrency(kpis.ahorroPeriodoAnterior) : '—'}
+            icon={DollarSign}
+            color="var(--accent-primary)"
+            subtitle={kpis.tieneComparativo ? 'Balance' : 'Sin datos previos'}
+          />
+        </div>
+      </details>
 
       <GoalsPanel metas={kpis.metas} />
 
@@ -391,28 +425,28 @@ const App: React.FC = () => {
   return (
     <div className="dashboard-container">
       <header className="app-header">
-        <div>
+        <div className="app-header__brand">
           <h1 className="app-title">MyContabilidadApp</h1>
-          <p className="app-subtitle">Control de ingresos, gastos y métricas en tiempo real</p>
+          <p className="app-subtitle">Control de ingresos, gastos y métricas</p>
         </div>
 
         <div className="app-header__actions">
-          <div className="user-chip">
-            <User size={18} color="var(--accent-color)" />
-            <span>{session.user.email}</span>
-            <button onClick={handleLogout} className="ghost-icon-button" title="Cerrar sesión">
-              <LogOut size={18} />
-            </button>
-          </div>
-
-          <button onClick={() => setModalState('create')} className="primary-action">
+          {/* El boton grande solo en escritorio: en celular esta accion vive en
+              el FAB de la barra inferior, dentro del alcance del pulgar. */}
+          <button onClick={openCreate} className="primary-action hide-mobile">
             <Plus size={18} />
-            Añadir transacción
+            Nuevo movimiento
           </button>
+
+          <AccountMenu
+            email={session.user.email ?? ''}
+            onLogout={handleLogout}
+            onExport={handleExport}
+          />
         </div>
       </header>
 
-      <TopNav />
+      <TopNav onAdd={openCreate} />
 
       {error && (
         <div className="error-banner">
@@ -438,7 +472,8 @@ const App: React.FC = () => {
               {filtersBar}
               <TransactionsTable
                 transactions={filteredData}
-                onEdit={transaction => setModalState(transaction)}
+                onEdit={tx => setModalState({ mode: 'edit', tx })}
+                onRepeat={tx => setModalState({ mode: 'repeat', tx })}
                 onDelete={handleDeleteTransaction}
               />
             </>
@@ -469,7 +504,8 @@ const App: React.FC = () => {
           categories={categoryNames}
           onClose={() => setModalState(null)}
           onSave={handleSaveTransaction}
-          editingTransaction={modalState !== 'create' ? modalState : undefined}
+          editingTransaction={modalState.mode === 'edit' ? modalState.tx : undefined}
+          prefill={modalState.mode === 'repeat' ? modalState.tx : undefined}
         />
       )}
 

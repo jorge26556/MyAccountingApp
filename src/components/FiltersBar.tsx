@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calendar, ChevronDown, ChevronUp, Filter, RotateCcw, Search } from 'lucide-react';
+import { Calendar, ChevronDown, ChevronUp, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { DashboardFilters } from '../types';
 import { toDateString, parseLocalDate } from '../lib/dates';
 import { EMPTY_FILTERS } from '../lib/filters';
@@ -12,6 +12,67 @@ interface FiltersBarProps {
   resultCount: number;
 }
 
+/** Un filtro activo, con la forma de deshacerlo. */
+interface ActiveChip {
+  key: string;
+  label: string;
+  clear: (prev: DashboardFilters) => DashboardFilters;
+}
+
+const formatoCorto = new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'short' });
+
+const buildChips = (filters: DashboardFilters): ActiveChip[] => {
+  const chips: ActiveChip[] = [];
+
+  if (filters.tipo !== 'Todos') {
+    chips.push({ key: 'tipo', label: filters.tipo, clear: prev => ({ ...prev, tipo: 'Todos' }) });
+  }
+
+  if (filters.estadoPago !== 'Todos') {
+    chips.push({
+      key: 'estado',
+      label: filters.estadoPago,
+      clear: prev => ({ ...prev, estadoPago: 'Todos' }),
+    });
+  }
+
+  filters.categorias.forEach(categoria => {
+    chips.push({
+      key: `cat-${categoria}`,
+      label: categoria,
+      clear: prev => ({ ...prev, categorias: prev.categorias.filter(item => item !== categoria) }),
+    });
+  });
+
+  filters.canales.forEach(canal => {
+    chips.push({
+      key: `canal-${canal}`,
+      label: canal,
+      clear: prev => ({ ...prev, canales: prev.canales.filter(item => item !== canal) }),
+    });
+  });
+
+  if (filters.activeSearch.trim()) {
+    chips.push({
+      key: 'busqueda',
+      label: `"${filters.activeSearch.trim()}"`,
+      clear: prev => ({ ...prev, activeSearch: '' }),
+    });
+  }
+
+  if (filters.dateFrom || filters.dateTo) {
+    const desde = filters.dateFrom ? formatoCorto.format(filters.dateFrom) : '…';
+    const hasta = filters.dateTo ? formatoCorto.format(filters.dateTo) : '…';
+    chips.push({
+      key: 'fechas',
+      label: `${desde} — ${hasta}`,
+      clear: prev => ({ ...prev, dateFrom: null, dateTo: null, period: EMPTY_FILTERS.period }),
+    });
+  }
+
+  return chips;
+};
+
 const FiltersBar: React.FC<FiltersBarProps> = ({
   filters,
   setFilters,
@@ -19,7 +80,14 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
   availableCanales,
   resultCount,
 }) => {
-  const [isMinimized, setIsMinimized] = useState(false);
+  /**
+   * Cerrado por defecto. Abierto ocupaba ~500px del alto de un celular con
+   * controles que casi nunca se tocan, empujando todos los datos fuera de la
+   * primera pantalla.
+   */
+  const [isOpen, setIsOpen] = useState(false);
+
+  const chips = buildChips(filters);
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = event.target;
@@ -29,13 +97,13 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
   const handleDateChange = (key: 'dateFrom' | 'dateTo', value: string) => {
     setFilters(prev => ({
       ...prev,
-      // Elegir una fecha manualmente implica periodo personalizado.
+      // Elegir una fecha a mano implica periodo personalizado.
       period: 'custom',
       [key]: value ? parseLocalDate(value) : null,
     }));
   };
 
-  const handleMultiSelect = (name: 'categorias' | 'canales', value: string) => {
+  const toggleMulti = (name: 'categorias' | 'canales', value: string) => {
     setFilters(prev => {
       const current = prev[name];
       return current.includes(value)
@@ -44,97 +112,75 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
     });
   };
 
-  const handleClearFilters = () => setFilters(EMPTY_FILTERS);
-
-  const activeCount =
-    (filters.tipo !== 'Todos' ? 1 : 0) +
-    (filters.estadoPago !== 'Todos' ? 1 : 0) +
-    filters.categorias.length +
-    filters.canales.length +
-    (filters.activeSearch ? 1 : 0) +
-    (filters.dateFrom || filters.dateTo ? 1 : 0);
-
   return (
-    <div className="card" style={{ marginBottom: '2rem' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: isMinimized ? 0 : '1.5rem',
-          gap: '1rem',
-        }}
-      >
-        <h3
-          style={{
-            margin: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            color: 'var(--text-secondary)',
-            fontSize: '1rem',
-          }}
+    <div className="filters">
+      <div className="filters__bar">
+        <button
+          type="button"
+          className={`filters__toggle ${chips.length > 0 ? 'has-active' : ''}`}
+          onClick={() => setIsOpen(value => !value)}
+          aria-expanded={isOpen}
         >
-          <Filter size={18} />
-          Filtros
-          {activeCount > 0 && <span className="badge badge-pending">{activeCount}</span>}
-          <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.85rem' }}>
-            · {resultCount} {resultCount === 1 ? 'registro' : 'registros'}
-          </span>
-        </h3>
+          <SlidersHorizontal size={16} />
+          <span>Filtros</span>
+          {chips.length > 0 && <span className="filters__count">{chips.length}</span>}
+          {isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </button>
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <span className="filters__result">
+          {resultCount} {resultCount === 1 ? 'registro' : 'registros'}
+        </span>
+
+        {chips.length > 0 && (
           <button
             type="button"
-            onClick={handleClearFilters}
-            className="ghost-icon-button"
-            title="Restablecer filtros"
-            disabled={activeCount === 0}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.85rem' }}
+            className="filters__clear"
+            onClick={() => setFilters(prev => ({ ...EMPTY_FILTERS, period: prev.period }))}
           >
-            <RotateCcw size={16} />
-            <span className="hide-mobile">Restablecer</span>
+            <RotateCcw size={14} />
+            <span className="hide-mobile">Limpiar</span>
           </button>
-
-          <button
-            type="button"
-            onClick={() => setIsMinimized(!isMinimized)}
-            className="ghost-icon-button"
-            aria-expanded={!isMinimized}
-            title={isMinimized ? 'Mostrar filtros' : 'Ocultar filtros'}
-          >
-            {isMinimized ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
-          </button>
-        </div>
+        )}
       </div>
 
-      {!isMinimized && (
-        <>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-              gap: '1.5rem',
-            }}
-          >
+      {/* Los filtros activos siguen visibles con el panel cerrado: si no, los
+          numeros cambian y no hay nada en pantalla que explique por que. */}
+      {chips.length > 0 && (
+        <div className="filters__chips">
+          {chips.map(chip => (
+            <button
+              key={chip.key}
+              type="button"
+              className="filters__chip"
+              onClick={() => setFilters(chip.clear)}
+              aria-label={`Quitar filtro ${chip.label}`}
+            >
+              {chip.label}
+              <X size={13} />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isOpen && (
+        <div className="card filters__panel">
+          <div className="filters__fields">
             <div className="filter-group">
-              <label style={labelStyle} htmlFor="filter-date-from">
-                <Calendar size={14} /> Fecha desde
+              <label htmlFor="filter-date-from">
+                <Calendar size={14} /> Desde
               </label>
               <input
                 id="filter-date-from"
                 type="date"
                 className="input-style"
-                /* Antes este input no era controlado: "Restablecer" limpiaba el
-                   estado pero la fecha seguia visible en pantalla. */
                 value={filters.dateFrom ? toDateString(filters.dateFrom) : ''}
                 onChange={event => handleDateChange('dateFrom', event.target.value)}
               />
             </div>
 
             <div className="filter-group">
-              <label style={labelStyle} htmlFor="filter-date-to">
-                <Calendar size={14} /> Fecha hasta
+              <label htmlFor="filter-date-to">
+                <Calendar size={14} /> Hasta
               </label>
               <input
                 id="filter-date-to"
@@ -146,9 +192,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
             </div>
 
             <div className="filter-group">
-              <label style={labelStyle} htmlFor="filter-tipo">
-                <Filter size={14} /> Tipo
-              </label>
+              <label htmlFor="filter-tipo">Tipo</label>
               <select
                 id="filter-tipo"
                 name="tipo"
@@ -163,9 +207,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
             </div>
 
             <div className="filter-group">
-              <label style={labelStyle} htmlFor="filter-estado">
-                <Filter size={14} /> Estado
-              </label>
+              <label htmlFor="filter-estado">Estado</label>
               <select
                 id="filter-estado"
                 name="estadoPago"
@@ -179,15 +221,15 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
               </select>
             </div>
 
-            <div className="filter-group">
-              <label style={labelStyle} htmlFor="filter-search">
-                <Search size={14} /> Busqueda
+            <div className="filter-group filters__search">
+              <label htmlFor="filter-search">
+                <Search size={14} /> Búsqueda
               </label>
               <input
                 id="filter-search"
                 type="text"
                 name="activeSearch"
-                placeholder="Descripcion, categoria o ID..."
+                placeholder="Descripción, categoría o ID..."
                 className="input-style"
                 value={filters.activeSearch}
                 onChange={handleChange}
@@ -195,64 +237,45 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
             </div>
           </div>
 
-          <div style={{ marginTop: '1.5rem', display: 'grid', gap: '1rem' }}>
-            <div className="filter-group">
-              <label style={labelStyle}>Categorias</label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {availableCategorias.length === 0 && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    Sin categorias todavia
-                  </span>
-                )}
-                {availableCategorias.map(category => (
-                  <button
-                    key={category}
-                    type="button"
-                    aria-pressed={filters.categorias.includes(category)}
-                    onClick={() => handleMultiSelect('categorias', category)}
-                    className={`badge-btn ${filters.categorias.includes(category) ? 'active' : ''}`}
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="filter-group">
-              <label style={labelStyle}>Canales</label>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {availableCanales.length === 0 && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                    Sin canales todavia
-                  </span>
-                )}
-                {availableCanales.map(channel => (
-                  <button
-                    key={channel}
-                    type="button"
-                    aria-pressed={filters.canales.includes(channel)}
-                    onClick={() => handleMultiSelect('canales', channel)}
-                    className={`badge-btn ${filters.canales.includes(channel) ? 'active' : ''}`}
-                  >
-                    {channel}
-                  </button>
-                ))}
-              </div>
+          <div className="filters__group">
+            <span className="filters__group-label">Categorías</span>
+            <div className="filters__options">
+              {availableCategorias.length === 0 && <span className="filters__empty">Sin categorías</span>}
+              {availableCategorias.map(categoria => (
+                <button
+                  key={categoria}
+                  type="button"
+                  aria-pressed={filters.categorias.includes(categoria)}
+                  onClick={() => toggleMulti('categorias', categoria)}
+                  className={`badge-btn ${filters.categorias.includes(categoria) ? 'active' : ''}`}
+                >
+                  {categoria}
+                </button>
+              ))}
             </div>
           </div>
-        </>
+
+          <div className="filters__group">
+            <span className="filters__group-label">Canales</span>
+            <div className="filters__options">
+              {availableCanales.length === 0 && <span className="filters__empty">Sin canales</span>}
+              {availableCanales.map(canal => (
+                <button
+                  key={canal}
+                  type="button"
+                  aria-pressed={filters.canales.includes(canal)}
+                  onClick={() => toggleMulti('canales', canal)}
+                  className={`badge-btn ${filters.canales.includes(canal) ? 'active' : ''}`}
+                >
+                  {canal}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
-};
-
-const labelStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.5rem',
-  fontSize: '0.85rem',
-  color: 'var(--text-secondary)',
-  marginBottom: '0.5rem',
 };
 
 export default FiltersBar;

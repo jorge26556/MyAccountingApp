@@ -10,6 +10,8 @@ interface TransactionModalProps {
   onClose: () => void;
   onSave: (transaction: Omit<Transaction, 'id' | 'user_id'>) => Promise<void>;
   editingTransaction?: Transaction;
+  /** Movimiento del cual copiar los datos al crear uno nuevo ("repetir"). */
+  prefill?: Transaction;
 }
 
 const CANALES = ['Directo', 'Transferencia', 'Tarjeta', 'Efectivo', 'Nequi', 'Daviplata', 'Otro'];
@@ -19,26 +21,34 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
   onClose,
   onSave,
   editingTransaction,
+  prefill,
 }) => {
   const toast = useToast();
   const isEditMode = Boolean(editingTransaction);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const importeRef = useRef<HTMLInputElement>(null);
+
+  // Al editar se parte del movimiento real; al repetir, de una copia con la
+  // fecha de hoy (repetir el arriendo del mes pasado significa registrarlo hoy,
+  // no volver a registrarlo con la fecha vieja).
+  const base = editingTransaction ?? prefill;
 
   const selectableCategories = useMemo(() => {
-    const current = editingTransaction?.categoria?.trim();
+    const current = base?.categoria?.trim();
     const merged = current && !categories.includes(current) ? [current, ...categories] : categories;
     return merged.filter(Boolean);
-  }, [categories, editingTransaction?.categoria]);
+  }, [categories, base?.categoria]);
 
   const [loading, setLoading] = useState(false);
+  const [guardadas, setGuardadas] = useState(0);
   const [formData, setFormData] = useState({
     fecha: toDateString(editingTransaction?.fecha ?? today()),
-    tipo: (editingTransaction?.tipo ?? 'Gasto') as TransactionType,
-    categoria: editingTransaction?.categoria ?? selectableCategories[0] ?? '',
-    importe: editingTransaction ? String(Math.abs(editingTransaction.importe)) : '',
-    estado_pago: (editingTransaction?.estado_pago ?? 'Pagado') as PaymentStatus,
-    descripcion: editingTransaction?.descripcion ?? '',
-    canal: editingTransaction?.canal ?? 'Directo',
+    tipo: (base?.tipo ?? 'Gasto') as TransactionType,
+    categoria: base?.categoria ?? selectableCategories[0] ?? '',
+    importe: base ? String(Math.abs(base.importe)) : '',
+    estado_pago: (base?.estado_pago ?? 'Pagado') as PaymentStatus,
+    descripcion: base?.descripcion ?? '',
+    canal: base?.canal ?? 'Directo',
   });
 
   const set = (key: keyof typeof formData, value: string) =>
@@ -58,25 +68,51 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
   const noCategoriesAvailable = selectableCategories.length === 0;
   const puedeGuardar = importeValido && !noCategoriesAvailable && !loading;
 
+  const guardar = async () => {
+    const [year, month, day] = formData.fecha.split('-').map(Number);
+    await onSave({
+      fecha: new Date(year, month - 1, day),
+      tipo: formData.tipo,
+      categoria: formData.categoria,
+      importe: Math.abs(importeNumerico),
+      estado_pago: formData.estado_pago,
+      descripcion: formData.descripcion.trim(),
+      canal: formData.canal,
+    });
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!puedeGuardar) return;
 
     setLoading(true);
     try {
-      const [year, month, day] = formData.fecha.split('-').map(Number);
-      await onSave({
-        fecha: new Date(year, month - 1, day),
-        tipo: formData.tipo,
-        categoria: formData.categoria,
-        importe: Math.abs(importeNumerico),
-        estado_pago: formData.estado_pago,
-        descripcion: formData.descripcion.trim(),
-        canal: formData.canal,
-      });
+      await guardar();
       onClose();
     } catch (error) {
-      toast.error(errorMessage(error, 'No se pudo guardar la transaccion'));
+      toast.error(errorMessage(error, 'No se pudo guardar el movimiento'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Registrar varios gastos de una misma salida (mercado, gasolina, café)
+   * obligaba a reabrir el modal y volver a elegir fecha y canal cada vez.
+   * Esto conserva fecha, tipo, canal y estado —lo que casi siempre se repite—
+   * y limpia importe, categoría y descripción.
+   */
+  const handleSaveAndNew = async () => {
+    if (!puedeGuardar) return;
+
+    setLoading(true);
+    try {
+      await guardar();
+      setGuardadas(total => total + 1);
+      setFormData(prev => ({ ...prev, importe: '', descripcion: '' }));
+      importeRef.current?.focus();
+    } catch (error) {
+      toast.error(errorMessage(error, 'No se pudo guardar el movimiento'));
     } finally {
       setLoading(false);
     }
@@ -95,11 +131,16 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ color: 'var(--text-primary)', fontSize: '1.15rem', fontWeight: 700, margin: 0 }}>
-              {isEditMode ? 'Editar transacción' : 'Añadir transacción'}
+              {isEditMode ? 'Editar movimiento' : prefill ? 'Repetir movimiento' : 'Nuevo movimiento'}
             </h3>
             {isEditMode && (
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                 ID {editingTransaction?.id.slice(0, 8)}…
+              </p>
+            )}
+            {guardadas > 0 && (
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--success)' }}>
+                {guardadas} {guardadas === 1 ? 'movimiento guardado' : 'movimientos guardados'} en esta sesión
               </p>
             )}
           </div>
@@ -196,6 +237,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
           <div style={fieldStyle}>
             <label style={labelStyle} htmlFor="tx-importe">Importe (COP)</label>
             <input
+              ref={importeRef}
               id="tx-importe"
               type="number"
               inputMode="numeric"
@@ -205,6 +247,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
               value={formData.importe}
               onChange={event => set('importe', event.target.value)}
               required
+              autoFocus
               style={inputStyle}
             />
             {/* Confirmacion visual de la cifra: evita el cero de mas al teclear. */}
@@ -272,8 +315,20 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
             }}
           >
             <Save size={17} />
-            {loading ? 'Guardando...' : isEditMode ? 'Guardar cambios' : 'Guardar transacción'}
+            {loading ? 'Guardando...' : isEditMode ? 'Guardar cambios' : 'Guardar y cerrar'}
           </button>
+
+          {!isEditMode && (
+            <button
+              type="button"
+              onClick={handleSaveAndNew}
+              disabled={!puedeGuardar}
+              className="modal-secondary-action"
+            >
+              <PlusCircle size={16} />
+              Guardar y añadir otra
+            </button>
+          )}
         </form>
       </div>
     </div>

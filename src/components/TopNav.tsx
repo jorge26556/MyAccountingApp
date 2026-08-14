@@ -1,34 +1,80 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, List, Settings } from 'lucide-react';
+import { Home, List, Plus, Settings } from 'lucide-react';
+import { useIsMobile } from '../lib/useMediaQuery';
 
-/**
- * Antes la navegacion era un useState: recargar la pagina te devolvia al
- * dashboard, el boton "atras" del navegador te sacaba de la app y no se podia
- * compartir un enlace a una vista concreta. Ahora son rutas reales.
- */
+interface NavProps {
+  onAdd: () => void;
+}
+
 const ITEMS = [
-  { to: '/', label: 'Inicio', icon: <Home size={16} />, end: true },
-  { to: '/transacciones', label: 'Transacciones', icon: <List size={16} />, end: false },
-  { to: '/configuracion', label: 'Configuración', icon: <Settings size={16} />, end: false },
+  { to: '/', label: 'Inicio', icon: Home, end: true },
+  { to: '/transacciones', label: 'Transacciones', icon: List, end: false },
+  { to: '/configuracion', label: 'Configuración', icon: Settings, end: false },
 ];
 
-const TopNav: React.FC = () => (
-  <nav className="top-nav">
-    <div className="top-nav__inner">
-      {ITEMS.map(item => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.end}
-          className={({ isActive }) => `top-nav__item ${isActive ? 'is-active' : ''}`}
-        >
-          {item.icon}
-          <span>{item.label}</span>
+/**
+ * En celular la navegacion vive abajo, en la zona del pulgar, con el boton de
+ * anadir al centro: es la accion mas frecuente de la app y estaba arriba del
+ * todo, en la esquina mas dificil de alcanzar con una mano.
+ *
+ * En escritorio no hay barra inferior — se ve fuera de lugar en un monitor y
+ * ahi el alcance no es un problema — asi que se mantiene la nav superior.
+ */
+const TopNav: React.FC<NavProps> = ({ onAdd }) => {
+  const isMobile = useIsMobile();
+
+  if (isMobile) {
+    return (
+      <nav className="bottom-nav" aria-label="Navegación principal">
+        <NavLink to="/" end className={({ isActive }) => `bottom-nav__item ${isActive ? 'is-active' : ''}`}>
+          <Home size={20} />
+          <span>Inicio</span>
         </NavLink>
-      ))}
-    </div>
-  </nav>
-);
+
+        <NavLink
+          to="/transacciones"
+          className={({ isActive }) => `bottom-nav__item ${isActive ? 'is-active' : ''}`}
+        >
+          <List size={20} />
+          <span>Movimientos</span>
+        </NavLink>
+
+        <button type="button" className="bottom-nav__fab" onClick={onAdd} aria-label="Añadir transacción">
+          <Plus size={24} />
+        </button>
+
+        <NavLink
+          to="/configuracion"
+          className={({ isActive }) => `bottom-nav__item ${isActive ? 'is-active' : ''}`}
+        >
+          <Settings size={20} />
+          <span>Ajustes</span>
+        </NavLink>
+      </nav>
+    );
+  }
+
+  return (
+    <nav className="top-nav" aria-label="Navegación principal">
+      <div className="top-nav__inner">
+        {ITEMS.map(item => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) => `top-nav__item ${isActive ? 'is-active' : ''}`}
+            >
+              <Icon size={16} />
+              <span>{item.label}</span>
+            </NavLink>
+          );
+        })}
+      </div>
+    </nav>
+  );
+};
 
 export default TopNav;

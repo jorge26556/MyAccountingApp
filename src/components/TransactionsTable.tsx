@@ -1,21 +1,29 @@
 import React, { useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, ChevronsUpDown, Pencil, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronsUpDown, Copy, Pencil, Trash2 } from 'lucide-react';
 import type { Transaction } from '../types';
 import { formatCurrency } from '../lib/format';
+import { useIsMobile } from '../lib/useMediaQuery';
 
 interface TransactionsTableProps {
   transactions: Transaction[];
   onEdit: (transaction: Transaction) => void;
   onDelete: (id: string) => void;
+  onRepeat: (transaction: Transaction) => void;
 }
 
 type SortKey = 'fecha' | 'importe' | 'categoria' | 'canal';
 
 const ITEMS_PER_PAGE = 15;
 
-const TransactionsTable: React.FC<TransactionsTableProps> = ({ transactions, onEdit, onDelete }) => {
+const TransactionsTable: React.FC<TransactionsTableProps> = ({
+  transactions,
+  onEdit,
+  onDelete,
+  onRepeat,
+}) => {
+  const isMobile = useIsMobile();
   const [currentPage, setCurrentPage] = useState(1);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' }>({
@@ -40,18 +48,13 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({ transactions, onE
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / ITEMS_PER_PAGE));
 
   /**
-   * Estar en la pagina 4 y aplicar un filtro que dejaba 5 resultados mostraba
-   * una tabla vacia sin explicacion.
-   *
-   * La pagina visible se DERIVA en vez de corregirse desde un efecto: un efecto
-   * que llama setState provoca un render extra y deja un frame intermedio en
-   * blanco. Se acota en lugar de volver siempre a la 1, asi borrar un registro
-   * estando en la pagina 3 no te devuelve al principio.
+   * La pagina visible se DERIVA en vez de corregirse desde un efecto: asi no
+   * hay render intermedio en blanco al filtrar estando en una pagina alta.
+   * Se acota en lugar de volver siempre a la 1, para que borrar un registro
+   * desde la pagina 3 no te devuelva al principio.
    */
   const page = Math.min(currentPage, totalPages);
 
-  // Si el registro en confirmacion de borrado ya no esta en la lista (se borro,
-  // o un filtro lo saco), la confirmacion deja de aplicar.
   const activeDeleteId =
     deletingId && sortedTransactions.some(item => item.id === deletingId) ? deletingId : null;
 
@@ -70,37 +73,138 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({ transactions, onE
 
   if (transactions.length === 0) {
     return (
-      <div
-        className="card"
-        style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.95rem' }}
-      >
-        No hay transacciones en este periodo. Cambia el rango de fechas o agrega la primera.
+      <div className="card empty-state">
+        No hay movimientos en este periodo. Cambia el rango de fechas o registra el primero.
       </div>
     );
   }
 
+  const confirmacionBorrado = (item: Transaction) => (
+    <div className="tx-confirm">
+      <span>¿Eliminar {formatCurrency(Math.abs(item.importe))} de {item.categoria}? No se puede deshacer.</span>
+      <div className="tx-confirm__actions">
+        <button
+          type="button"
+          className="tx-confirm__yes"
+          onClick={() => {
+            setDeletingId(null);
+            onDelete(item.id);
+          }}
+        >
+          Sí, eliminar
+        </button>
+        <button type="button" className="tx-confirm__no" onClick={() => setDeletingId(null)}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+
+  const paginacion = sortedTransactions.length > ITEMS_PER_PAGE && (
+    <div className="tx-pagination">
+      <span>
+        {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(sortedTransactions.length, page * ITEMS_PER_PAGE)} de{' '}
+        {sortedTransactions.length}
+      </span>
+      <div className="tx-pagination__controls">
+        <span className="hide-mobile">Página {page} de {totalPages}</span>
+        <button
+          type="button"
+          disabled={page === 1}
+          onClick={() => setCurrentPage(page - 1)}
+          aria-label="Página anterior"
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => setCurrentPage(page + 1)}
+          aria-label="Página siguiente"
+        >
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
+
+  /* ─────────────────────────────── celular ─────────────────────────────── */
+
+  if (isMobile) {
+    return (
+      <div className="tx-cards">
+        {currentData.map(item => {
+          const esGasto = item.tipo === 'Gasto';
+          const enBorrado = activeDeleteId === item.id;
+
+          return (
+            <article key={item.id} className={`card tx-card ${enBorrado ? 'is-deleting' : ''}`}>
+              <div className="tx-card__top">
+                <div className="tx-card__main">
+                  <strong className="tx-card__categoria">{item.categoria}</strong>
+                  {item.descripcion && <p className="tx-card__desc">{item.descripcion}</p>}
+                </div>
+                <span className={`tx-card__importe ${esGasto ? 'is-gasto' : 'is-ingreso'}`}>
+                  {esGasto ? '−' : '+'}
+                  {formatCurrency(Math.abs(item.importe))}
+                </span>
+              </div>
+
+              <div className="tx-card__meta">
+                <span>{format(item.fecha, 'dd MMM yyyy', { locale: es })}</span>
+                <span>·</span>
+                <span>{item.canal}</span>
+                {item.estado_pago === 'Pendiente' && <span className="badge badge-pending">Pendiente</span>}
+              </div>
+
+              {enBorrado ? (
+                confirmacionBorrado(item)
+              ) : (
+                <div className="tx-card__actions">
+                  <button type="button" onClick={() => onRepeat(item)}>
+                    <Copy size={15} /> Repetir
+                  </button>
+                  <button type="button" onClick={() => onEdit(item)}>
+                    <Pencil size={15} /> Editar
+                  </button>
+                  <button type="button" className="is-danger" onClick={() => setDeletingId(item.id)}>
+                    <Trash2 size={15} /> Eliminar
+                  </button>
+                </div>
+              )}
+            </article>
+          );
+        })}
+
+        {paginacion}
+      </div>
+    );
+  }
+
+  /* ────────────────────────────── escritorio ───────────────────────────── */
+
   return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+    <div className="card tx-table-wrapper">
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+        <table className="tx-table">
           <thead>
-            <tr style={{ backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)' }}>
-              <th onClick={() => requestSort('fecha')} style={thStyle} scope="col">
+            <tr>
+              <th onClick={() => requestSort('fecha')} scope="col">
                 Fecha <ChevronsUpDown size={12} /> {sortIndicator('fecha')}
               </th>
-              <th style={thStyle} scope="col">Tipo</th>
-              <th onClick={() => requestSort('categoria')} style={thStyle} scope="col">
+              <th scope="col">Tipo</th>
+              <th onClick={() => requestSort('categoria')} scope="col">
                 Categoría <ChevronsUpDown size={12} /> {sortIndicator('categoria')}
               </th>
-              <th onClick={() => requestSort('canal')} style={thStyle} scope="col">
+              <th onClick={() => requestSort('canal')} scope="col">
                 Canal <ChevronsUpDown size={12} /> {sortIndicator('canal')}
               </th>
-              <th onClick={() => requestSort('importe')} style={{ ...thStyle, textAlign: 'right' }} scope="col">
+              <th onClick={() => requestSort('importe')} scope="col" style={{ textAlign: 'right' }}>
                 Importe <ChevronsUpDown size={12} /> {sortIndicator('importe')}
               </th>
-              <th style={thStyle} scope="col">Estado</th>
-              <th style={thStyle} scope="col">Descripción</th>
-              <th style={{ ...thStyle, textAlign: 'center', cursor: 'default' }} scope="col">Acciones</th>
+              <th scope="col">Estado</th>
+              <th scope="col">Descripción</th>
+              <th scope="col" style={{ textAlign: 'center', cursor: 'default' }}>Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -110,71 +214,52 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({ transactions, onE
 
               return (
                 <React.Fragment key={item.id}>
-                  <tr
-                    style={{
-                      borderBottom: enBorrado ? 'none' : '1px solid var(--border-color)',
-                      backgroundColor: enBorrado ? 'rgba(248,81,73,0.05)' : 'transparent',
-                      transition: 'background 0.2s',
-                    }}
-                  >
-                    <td style={tdStyle}>{format(item.fecha, 'dd MMM yyyy', { locale: es })}</td>
-                    <td style={tdStyle}>
+                  <tr className={enBorrado ? 'is-deleting' : ''}>
+                    <td>{format(item.fecha, 'dd MMM yyyy', { locale: es })}</td>
+                    <td>
                       <span className={esGasto ? 'badge-expense' : 'badge-income'}>{item.tipo}</span>
                     </td>
-                    <td style={tdStyle}>{item.categoria}</td>
-                    <td style={tdStyle}>{item.canal}</td>
-                    {/* Un gasto y un ingreso se veian identicos: mismo color, sin signo. */}
-                    <td
-                      style={{
-                        ...tdStyle,
-                        fontWeight: 700,
-                        textAlign: 'right',
-                        fontVariantNumeric: 'tabular-nums',
-                        color: esGasto ? 'var(--danger)' : 'var(--success)',
-                      }}
-                    >
+                    <td>{item.categoria}</td>
+                    <td>{item.canal}</td>
+                    <td className={`tx-table__importe ${esGasto ? 'is-gasto' : 'is-ingreso'}`}>
                       {esGasto ? '−' : '+'}
                       {formatCurrency(Math.abs(item.importe))}
                     </td>
-                    <td style={tdStyle}>
+                    <td>
                       <span className={`badge ${item.estado_pago === 'Pagado' ? 'badge-paid' : 'badge-pending'}`}>
                         {item.estado_pago}
                       </span>
                     </td>
-                    <td
-                      style={{
-                        ...tdStyle,
-                        color: 'var(--text-secondary)',
-                        fontSize: '0.85rem',
-                        maxWidth: '200px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                      title={item.descripcion}
-                    >
+                    <td className="tx-table__desc" title={item.descripcion}>
                       {item.descripcion || '—'}
                     </td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>
-                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                    <td>
+                      <div className="tx-table__actions">
                         <button
+                          type="button"
+                          title="Repetir"
+                          aria-label={`Repetir movimiento de ${item.categoria}`}
+                          onClick={() => onRepeat(item)}
+                        >
+                          <Copy size={14} />
+                        </button>
+                        <button
+                          type="button"
                           title="Editar"
-                          aria-label={`Editar transaccion de ${item.categoria}`}
+                          aria-label={`Editar movimiento de ${item.categoria}`}
                           onClick={() => {
                             setDeletingId(null);
                             onEdit(item);
                           }}
-                          style={editBtnStyle}
                         >
                           <Pencil size={14} />
                         </button>
                         <button
+                          type="button"
+                          className="is-danger"
                           title={enBorrado ? 'Cancelar' : 'Eliminar'}
-                          aria-label={`Eliminar transaccion de ${item.categoria}`}
+                          aria-label={`Eliminar movimiento de ${item.categoria}`}
                           onClick={() => setDeletingId(enBorrado ? null : item.id)}
-                          style={{
-                            ...deleteBtnStyle,
-                            backgroundColor: enBorrado ? 'rgba(248,81,73,0.25)' : 'rgba(248,81,73,0.1)',
-                          }}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -183,26 +268,8 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({ transactions, onE
                   </tr>
 
                   {enBorrado && (
-                    <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'rgba(248,81,73,0.06)' }}>
-                      <td colSpan={8} style={{ padding: '0.6rem 1rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.85rem', flexWrap: 'wrap' }}>
-                          <span style={{ color: 'var(--danger)', fontWeight: 600 }}>
-                            ¿Eliminar {formatCurrency(Math.abs(item.importe))} de {item.categoria}? No se puede deshacer.
-                          </span>
-                          <button
-                            onClick={() => {
-                              setDeletingId(null);
-                              onDelete(item.id);
-                            }}
-                            style={confirmDeleteBtnStyle}
-                          >
-                            Sí, eliminar
-                          </button>
-                          <button onClick={() => setDeletingId(null)} style={cancelBtnStyle}>
-                            Cancelar
-                          </button>
-                        </div>
-                      </td>
+                    <tr className="is-deleting">
+                      <td colSpan={8}>{confirmacionBorrado(item)}</td>
                     </tr>
                   )}
                 </React.Fragment>
@@ -212,117 +279,9 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({ transactions, onE
         </table>
       </div>
 
-      {sortedTransactions.length > ITEMS_PER_PAGE && (
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '1rem',
-            backgroundColor: 'var(--bg-tertiary)',
-            gap: '1rem',
-          }}
-        >
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            {(page - 1) * ITEMS_PER_PAGE + 1}–
-            {Math.min(sortedTransactions.length, page * ITEMS_PER_PAGE)} de{' '}
-            {sortedTransactions.length}
-          </span>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Página {page} de {totalPages}
-            </span>
-            <button
-              disabled={page === 1}
-              onClick={() => setCurrentPage(page - 1)}
-              style={paginationBtnStyle}
-              aria-label="Página anterior"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <button
-              disabled={page >= totalPages}
-              onClick={() => setCurrentPage(page + 1)}
-              style={paginationBtnStyle}
-              aria-label="Página siguiente"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        </div>
-      )}
+      {paginacion}
     </div>
   );
-};
-
-const thStyle: React.CSSProperties = {
-  padding: '1rem',
-  fontSize: '0.85rem',
-  fontWeight: 600,
-  color: 'var(--text-secondary)',
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-  userSelect: 'none',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '0.9rem 1rem',
-  fontSize: '0.9rem',
-  color: 'var(--text-primary)',
-  whiteSpace: 'nowrap',
-};
-
-const editBtnStyle: React.CSSProperties = {
-  padding: '0.4rem 0.55rem',
-  border: '1px solid var(--border-color)',
-  borderRadius: '6px',
-  backgroundColor: 'rgba(88,166,255,0.1)',
-  color: 'var(--accent-primary)',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const deleteBtnStyle: React.CSSProperties = {
-  padding: '0.4rem 0.55rem',
-  border: '1px solid rgba(248,81,73,0.3)',
-  borderRadius: '6px',
-  color: 'var(--danger)',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-};
-
-const confirmDeleteBtnStyle: React.CSSProperties = {
-  padding: '0.35rem 0.85rem',
-  border: 'none',
-  borderRadius: '6px',
-  backgroundColor: 'var(--danger)',
-  color: '#fff',
-  fontWeight: 600,
-  fontSize: '0.82rem',
-  cursor: 'pointer',
-};
-
-const cancelBtnStyle: React.CSSProperties = {
-  padding: '0.35rem 0.85rem',
-  border: '1px solid var(--border-color)',
-  borderRadius: '6px',
-  backgroundColor: 'transparent',
-  color: 'var(--text-secondary)',
-  fontSize: '0.82rem',
-  cursor: 'pointer',
-};
-
-const paginationBtnStyle: React.CSSProperties = {
-  padding: '0.5rem',
-  border: '1px solid var(--border-color)',
-  backgroundColor: 'var(--bg-secondary)',
-  color: 'var(--text-primary)',
-  borderRadius: '6px',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
 };
 
 export default TransactionsTable;
