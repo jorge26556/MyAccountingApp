@@ -24,6 +24,23 @@ npm run check
 
 Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 
+## Estado de las migraciones
+
+Ambas están aplicadas en producción:
+
+| Archivo | Contiene |
+|---|---|
+| `supabase/schema.sql` | Tablas base, RLS, trigger de perfiles, constraints e índices |
+| `supabase/002_presupuestos_recurrentes_cuenta.sql` | `budgets`, `recurring_transactions` y `delete_own_account()` |
+
+Para reconstruir la base desde cero, córrelas en ese orden.
+
+Después de cualquier migración nueva, regenera los tipos:
+
+```bash
+npm run types:supabase
+```
+
 ## Ajustes pendientes en el panel de Supabase
 
 Estos no se pueden hacer por SQL ni por migración; hay que entrar al panel.
@@ -76,6 +93,10 @@ select p.proname, has_function_privilege('anon', p.oid, 'EXECUTE') as anon_puede
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname = 'public' and p.prosecdef;
 ```
+
+El linter de Supabase marca `delete_own_account` como ejecutable por usuarios
+autenticados. **Es intencional**: para darse de baja hay que poder invocarla.
+La función valida `auth.uid()` y solo puede eliminar la cuenta de quien llama.
 
 Y la comprobación de caja negra, sin sesión — las cuatro deben devolver `[]`:
 

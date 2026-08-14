@@ -10,6 +10,11 @@
 -- no habia forma de recrear la base.
 --
 -- Ejecutar en: Supabase → SQL Editor.
+--
+-- Para reconstruir desde cero hay que correr DOS archivos, en orden:
+--   1. este (schema.sql)
+--   2. 002_presupuestos_recurrentes_cuenta.sql  → presupuestos, recurrentes
+--                                                  y baja de cuenta
 -- =============================================================================
 
 
