@@ -2,12 +2,7 @@
  * Tipos generados desde el esquema real de Supabase.
  *
  * Regenerar despues de cualquier migracion:
- *   npx supabase gen types typescript --project-id hfwvanvrbbreefhnwxzy > src/lib/database.types.ts
- *
- * `budgets`, `recurring_transactions` y `delete_own_account` estan escritos a
- * mano segun supabase/002_presupuestos_recurrentes_cuenta.sql, porque los tipos
- * se necesitaban antes de que la migracion estuviera aplicada. Al regenerar,
- * estas definiciones se reemplazan por las reales.
+ *   npm run types:supabase
  */
 
 export type Json =
@@ -19,6 +14,9 @@ export type Json =
   | Json[];
 
 export type Database = {
+  __InternalSupabase: {
+    PostgrestVersion: '14.1';
+  };
   public: {
     Tables: {
       budgets: {
@@ -42,6 +40,51 @@ export type Database = {
           created_at?: string;
           id?: string;
           user_id?: string;
+        };
+        Relationships: [];
+      };
+      categories: {
+        Row: {
+          created_at: string;
+          id: string;
+          name: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          id?: string;
+          name: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          id?: string;
+          name?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
+      profiles: {
+        Row: {
+          birthday: string | null;
+          created_at: string | null;
+          email: string | null;
+          id: string;
+          id_user: string;
+        };
+        Insert: {
+          birthday?: string | null;
+          created_at?: string | null;
+          email?: string | null;
+          id: string;
+          id_user: string;
+        };
+        Update: {
+          birthday?: string | null;
+          created_at?: string | null;
+          email?: string | null;
+          id?: string;
+          id_user?: string;
         };
         Relationships: [];
       };
@@ -84,36 +127,6 @@ export type Database = {
           tipo?: string;
           ultima_generacion?: string | null;
           user_id?: string;
-        };
-        Relationships: [];
-      };
-      categories: {
-        Row: { created_at: string; id: string; name: string; user_id: string };
-        Insert: { created_at?: string; id?: string; name: string; user_id: string };
-        Update: { created_at?: string; id?: string; name?: string; user_id?: string };
-        Relationships: [];
-      };
-      profiles: {
-        Row: {
-          birthday: string | null;
-          created_at: string | null;
-          email: string | null;
-          id: string;
-          id_user: string;
-        };
-        Insert: {
-          birthday?: string | null;
-          created_at?: string | null;
-          email?: string | null;
-          id: string;
-          id_user: string;
-        };
-        Update: {
-          birthday?: string | null;
-          created_at?: string | null;
-          email?: string | null;
-          id?: string;
-          id_user?: string;
         };
         Relationships: [];
       };
@@ -181,21 +194,28 @@ export type Database = {
         Relationships: [];
       };
     };
-    Views: { [_ in never]: never };
-    Functions: {
-      delete_own_account: {
-        Args: Record<string, never>;
-        Returns: undefined;
-      };
+    Views: {
+      [_ in never]: never;
     };
-    Enums: { [_ in never]: never };
-    CompositeTypes: { [_ in never]: never };
+    Functions: {
+      delete_own_account: { Args: Record<PropertyKey, never>; Returns: undefined };
+    };
+    Enums: {
+      [_ in never]: never;
+    };
+    CompositeTypes: {
+      [_ in never]: never;
+    };
   };
 };
 
-export type Tables<T extends keyof Database['public']['Tables']> =
-  Database['public']['Tables'][T]['Row'];
-export type TablesInsert<T extends keyof Database['public']['Tables']> =
-  Database['public']['Tables'][T]['Insert'];
-export type TablesUpdate<T extends keyof Database['public']['Tables']> =
-  Database['public']['Tables'][T]['Update'];
+type DatabaseWithoutInternals = Omit<Database, '__InternalSupabase'>;
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, 'public'>];
+
+export type Tables<T extends keyof DefaultSchema['Tables']> =
+  DefaultSchema['Tables'][T]['Row'];
+export type TablesInsert<T extends keyof DefaultSchema['Tables']> =
+  DefaultSchema['Tables'][T]['Insert'];
+export type TablesUpdate<T extends keyof DefaultSchema['Tables']> =
+  DefaultSchema['Tables'][T]['Update'];

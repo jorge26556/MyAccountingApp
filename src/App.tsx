@@ -100,8 +100,30 @@ const App: React.FC = () => {
   /* ─────────────────────────────── sesion ─────────────────────────────── */
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: current } }) => {
-      setSession(current);
+    /**
+     * `getSession()` lee la sesion de localStorage sin preguntarle al servidor,
+     * asi que un JWT sigue pareciendo valido hasta que expira aunque la cuenta
+     * ya no exista. Sin esta comprobacion, borrar la cuenta desde otro
+     * dispositivo dejaba la app "abierta" mostrando errores raros de llave
+     * foranea en vez de volver al login.
+     *
+     * `getUser()` si va al servidor. Es una sola peticion al arrancar, no en
+     * cada operacion.
+     */
+    supabase.auth.getSession().then(async ({ data: { session: current } }) => {
+      if (!current) {
+        setSession(null);
+        setAuthReady(true);
+        return;
+      }
+
+      const { error } = await supabase.auth.getUser();
+      if (error) {
+        await supabase.auth.signOut();
+        setSession(null);
+      } else {
+        setSession(current);
+      }
       setAuthReady(true);
     });
 
