@@ -5,10 +5,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Legend,
-  Pie,
-  PieChart,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -20,15 +19,18 @@ import { es } from 'date-fns/locale';
 import type { Transaction } from '../types';
 import { formatCurrency, formatCurrencyCompact } from '../lib/format';
 import { toDateString, today } from '../lib/dates';
+import { gastoAcumuladoComparado, tendenciaPorCategoria } from '../lib/analytics';
+import { useIsMobile } from '../lib/useMediaQuery';
 
 interface DashboardChartsProps {
+  /** Filtradas por el periodo seleccionado. */
   data: Transaction[];
+  /** Todas: los comparativos mes a mes necesitan datos fuera del periodo. */
+  allData: Transaction[];
   rango: { desde: Date | null; hasta: Date | null };
 }
 
 const COLORS = ['#58a6ff', '#f97316', '#3fb950', '#bc8cff', '#d29922', '#388bfd'];
-
-/** El heatmap se limita a 366 celdas: mas alla deja de ser legible. */
 const MAX_HEATMAP_DIAS = 366;
 
 const tooltipStyle: React.CSSProperties = {
@@ -37,12 +39,20 @@ const tooltipStyle: React.CSSProperties = {
   borderRadius: '8px',
 };
 
-const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
-  /**
-   * Todo el derivado va dentro de un useMemo. Antes se recalculaba entero en
-   * cada render del padre, incluyendo el recorrido completo de transacciones
-   * cuatro veces y la construccion del heatmap.
-   */
+/**
+ * Se quitaron tres graficas de la version anterior:
+ *
+ *  - "Distribucion de ingresos": con una o dos categorias de ingreso era una
+ *    dona de una sola tajada.
+ *  - "Movimiento por canal": interesante una vez, no cada mes.
+ *  - "Distribucion de gastos" (dona): mostraba exactamente el mismo dato que
+ *    "Top categorias de gasto" (barras). Sobraba una de las dos.
+ *
+ * Y se agregaron las que responden "¿como voy?" en vez de "¿cuanto llevo?".
+ */
+const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, allData, rango }) => {
+  const isMobile = useIsMobile();
+
   const charts = useMemo(() => {
     const timelineMap = new Map<
       string,
@@ -53,8 +63,6 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
       { month: string; sortKey: string; ingresos: number; gastos: number }
     >();
     const expenseCategoryMap = new Map<string, number>();
-    const incomeCategoryMap = new Map<string, number>();
-    const channelMap = new Map<string, { ingresos: number; gastos: number }>();
     const dailyExpensesMap = new Map<string, number>();
 
     const ordenados = [...data].sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
@@ -91,17 +99,10 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
       else mes.gastos += monto;
       monthlyMap.set(monthKey, mes);
 
-      if (esIngreso) {
-        incomeCategoryMap.set(item.categoria, (incomeCategoryMap.get(item.categoria) ?? 0) + monto);
-      } else {
+      if (!esIngreso) {
         expenseCategoryMap.set(item.categoria, (expenseCategoryMap.get(item.categoria) ?? 0) + monto);
         dailyExpensesMap.set(dayKey, (dailyExpensesMap.get(dayKey) ?? 0) + monto);
       }
-
-      const canal = channelMap.get(item.canal) ?? { ingresos: 0, gastos: 0 };
-      if (esIngreso) canal.ingresos += monto;
-      else canal.gastos += monto;
-      channelMap.set(item.canal, canal);
     });
 
     const timelineData = Array.from(timelineMap.values());
@@ -112,14 +113,11 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
       return { ...item, acumulado };
     });
 
-    // El heatmap sigue el periodo elegido en vez de estar clavado a 90 dias.
     const hoy = today();
     const heatmapHasta = rango.hasta && rango.hasta < hoy ? rango.hasta : hoy;
     let heatmapDesde = rango.desde ?? subDays(heatmapHasta, 89);
     const spanDias = Math.round((heatmapHasta.getTime() - heatmapDesde.getTime()) / 86_400_000);
-    if (spanDias > MAX_HEATMAP_DIAS) {
-      heatmapDesde = subDays(heatmapHasta, MAX_HEATMAP_DIAS - 1);
-    }
+    if (spanDias > MAX_HEATMAP_DIAS) heatmapDesde = subDays(heatmapHasta, MAX_HEATMAP_DIAS - 1);
     if (heatmapDesde > heatmapHasta) heatmapDesde = heatmapHasta;
 
     const maxExpense = Math.max(...Array.from(dailyExpensesMap.values()), 1);
@@ -139,20 +137,34 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
         .map(([name, value]) => ({ name, value }))
         .sort((a, b) => b.value - a.value)
         .slice(0, 6),
-      incomeCategoryData: Array.from(incomeCategoryMap.entries())
-        .map(([name, value]) => ({ name, value }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 6),
-      channelData: Array.from(channelMap.entries())
-        .map(([name, values]) => ({ name, ...values }))
-        .sort((a, b) => b.ingresos + b.gastos - (a.ingresos + a.gastos)),
       heatmapData,
     };
   }, [data, rango]);
 
+  // Los comparativos mes a mes usan el dataset completo: recortarlo al periodo
+  // dejaria el mes anterior siempre en cero.
+  const acumuladoComparado = useMemo(() => gastoAcumuladoComparado(allData), [allData]);
+  const tendencia = useMemo(() => tendenciaPorCategoria(allData, 6), [allData]);
+
+  const tendenciaData = useMemo(
+    () =>
+      tendencia.meses.map((mes, index) => {
+        const fila: Record<string, string | number> = {
+          mes: format(new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)) - 1, 1), 'MMM', {
+            locale: es,
+          }),
+        };
+        tendencia.categorias.slice(0, 4).forEach(cat => {
+          fila[cat.categoria] = cat.valores[index];
+        });
+        return fila;
+      }),
+    [tendencia]
+  );
+
   if (data.length === 0) {
     return (
-      <div className="card" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2.5rem' }}>
+      <div className="card empty-state">
         Aún no hay datos en este periodo para mostrar analítica visual.
       </div>
     );
@@ -163,14 +175,89 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
     tickLine: false,
     axisLine: false,
     tickFormatter: (value: number | string) => formatCurrencyCompact(Number(value)),
-    width: 80,
+    width: isMobile ? 52 : 80,
   };
 
   return (
     <div className="charts-grid">
+      {/* ── La grafica que responde "¿voy mas rapido que el mes pasado?" ── */}
+      <div className="card">
+        <h4 className="chart-title">Gasto acumulado: este mes vs. el pasado</h4>
+        <p className="chart-caption">
+          Si la línea de este mes va por encima, estás gastando más rápido de lo que ibas.
+        </p>
+        <div style={{ height: '320px' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={acumuladoComparado}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+              <XAxis
+                dataKey="dia"
+                stroke="var(--text-secondary)"
+                tickLine={false}
+                axisLine={false}
+                minTickGap={20}
+              />
+              <YAxis {...ejeY} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={value => formatCurrency(Number(value))}
+                labelFormatter={dia => `Día ${dia}`}
+              />
+              <Legend wrapperStyle={{ paddingTop: '16px' }} />
+              <Line
+                type="monotone"
+                dataKey="anterior"
+                name="Mes pasado"
+                stroke="var(--text-muted)"
+                strokeWidth={2}
+                strokeDasharray="4 4"
+                dot={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="actual"
+                name="Este mes"
+                stroke="#f97316"
+                strokeWidth={3}
+                dot={false}
+                connectNulls={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="card">
+        <h4 className="chart-title">Tendencia por categoría</h4>
+        <p className="chart-caption">
+          Últimos 6 meses. Sirve para ver qué categoría viene subiendo, no solo cuánto llevas.
+        </p>
+        <div style={{ height: '320px' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={tendenciaData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+              <XAxis dataKey="mes" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
+              <YAxis {...ejeY} />
+              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
+              <Legend wrapperStyle={{ paddingTop: '16px' }} />
+              {tendencia.categorias.slice(0, 4).map((cat, index) => (
+                <Line
+                  key={cat.categoria}
+                  type="monotone"
+                  dataKey={cat.categoria}
+                  stroke={COLORS[index % COLORS.length]}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
       <div className="card">
         <h4 className="chart-title">Flujo de caja en el tiempo</h4>
-        <p className="chart-caption">Compara lo que entró, lo que salió y el balance neto por fecha.</p>
+        <p className="chart-caption">Lo que entró, lo que salió y el balance neto por fecha.</p>
         <div style={{ height: '320px' }}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={charts.timelineData}>
@@ -249,7 +336,7 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
             <BarChart data={charts.expenseCategoryData} layout="vertical" margin={{ left: 8, right: 12 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" horizontal={false} />
               <XAxis type="number" hide />
-              <YAxis dataKey="name" type="category" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={100} />
+              <YAxis dataKey="name" type="category" stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={90} />
               <Tooltip
                 contentStyle={tooltipStyle}
                 formatter={value => formatCurrency(Number(value))}
@@ -261,100 +348,30 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, rango }) => {
         </div>
       </div>
 
-      <div className="card">
-        <h4 className="chart-title">Distribución de gastos</h4>
-        <p className="chart-caption">Peso porcentual de cada categoría sobre el total gastado.</p>
-        <div style={{ height: '320px' }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={charts.expenseCategoryData}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                innerRadius={70}
-                outerRadius={100}
-                paddingAngle={4}
-                label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
-                labelLine={false}
-              >
-                {charts.expenseCategoryData.map((entry, index) => (
-                  <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
-            </PieChart>
-          </ResponsiveContainer>
+      {/* El heatmap con 90+ celdas de 15px no se lee en un celular. */}
+      {!isMobile && (
+        <div className="card" style={{ gridColumn: '1 / -1' }}>
+          <h4 className="chart-title">Actividad de gasto día a día</h4>
+          <p className="chart-caption">
+            Cada celda es un día del periodo: mientras más intensa, más gastaste ese día.
+          </p>
+          <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+            {charts.heatmapData.map(day => (
+              <div
+                key={day.key}
+                title={`${format(day.date, 'dd MMM yyyy', { locale: es })}: ${formatCurrency(day.amount)}`}
+                className="heatmap-cell"
+                style={{
+                  backgroundColor:
+                    day.amount > 0
+                      ? `rgba(248, 81, 73, ${0.2 + day.intensity * 0.8})`
+                      : 'var(--bg-tertiary)',
+                }}
+              />
+            ))}
+          </div>
         </div>
-      </div>
-
-      <div className="card">
-        <h4 className="chart-title">Distribución de ingresos</h4>
-        <p className="chart-caption">De dónde viene tu dinero.</p>
-        <div style={{ height: '320px' }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={charts.incomeCategoryData}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                innerRadius={70}
-                outerRadius={100}
-                paddingAngle={4}
-              >
-                {charts.incomeCategoryData.map((entry, index) => (
-                  <Cell key={entry.name} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
-              <Legend verticalAlign="bottom" height={36} />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="card">
-        <h4 className="chart-title">Movimiento por canal</h4>
-        <p className="chart-caption">Cuánto entró y salió por cada medio de pago.</p>
-        <div style={{ height: '320px' }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={charts.channelData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-              <XAxis dataKey="name" stroke="var(--text-secondary)" tickLine={false} axisLine={false} />
-              <YAxis {...ejeY} />
-              <Tooltip contentStyle={tooltipStyle} formatter={value => formatCurrency(Number(value))} />
-              <Legend />
-              <Bar dataKey="ingresos" name="Ingresos" fill="#3fb950" radius={[8, 8, 0, 0]} />
-              <Bar dataKey="gastos" name="Gastos" fill="#f85149" radius={[8, 8, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="card" style={{ gridColumn: '1 / -1' }}>
-        <h4 className="chart-title">Actividad de gasto día a día</h4>
-        <p className="chart-caption">
-          Cada celda es un día del periodo: mientras más intensa, más gastaste ese día.
-        </p>
-        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-          {charts.heatmapData.map(day => (
-            <div
-              key={day.key}
-              title={`${format(day.date, 'dd MMM yyyy', { locale: es })}: ${formatCurrency(day.amount)}`}
-              className="heatmap-cell"
-              style={{
-                backgroundColor:
-                  day.amount > 0
-                    ? `rgba(248, 81, 73, ${0.2 + day.intensity * 0.8})`
-                    : 'var(--bg-tertiary)',
-              }}
-            />
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 };

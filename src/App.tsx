@@ -19,6 +19,8 @@ import TopNav from './components/TopNav';
 import TransactionModal from './components/TransactionModal';
 import TransactionsTable from './components/TransactionsTable';
 import GoalsPanel from './components/GoalsPanel';
+import MonthPulse from './components/MonthPulse';
+import BudgetsPanel from './components/BudgetsPanel';
 import AccountMenu from './components/AccountMenu';
 
 // recharts pesa mas que todo el resto de la app junta. Cargarlo aparte deja que
@@ -31,6 +33,7 @@ import { errorMessage, useToast } from './lib/toast';
 import { supabase } from './lib/supabase';
 import { applyFilters, computeKpis, previousPeriod, resolvePeriod } from './lib/kpis';
 import { EMPTY_FILTERS } from './lib/filters';
+import { estadoPresupuestos, proyeccionCierreMes } from './lib/analytics';
 import { formatCurrency, formatPercent } from './lib/format';
 import { downloadCsv } from './lib/csv';
 import { toDateString, today } from './lib/dates';
@@ -48,6 +51,18 @@ import {
   updateSavingsGoal,
   updateTransaction,
 } from './services/api';
+import {
+  createRecurring,
+  deleteBudget,
+  deleteRecurring,
+  fetchBudgets,
+  fetchRecurring,
+  generarRecurrentesPendientes,
+  toggleRecurring,
+  upsertBudget,
+  type Budget,
+  type RecurringTransaction,
+} from './services/extras';
 import type { Category, DashboardFilters, SavingsGoal, Transaction } from './types';
 
 type ModalState =
@@ -67,6 +82,10 @@ const App: React.FC = () => {
   const [data, setData] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [budgetsDisponibles, setBudgetsDisponibles] = useState(false);
+  const [recurrentes, setRecurrentes] = useState<RecurringTransaction[]>([]);
+  const [recurrentesDisponibles, setRecurrentesDisponibles] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,6 +115,8 @@ const App: React.FC = () => {
         setData([]);
         setCategories([]);
         setSavingsGoals([]);
+        setBudgets([]);
+        setRecurrentes([]);
       }
       setSession(nextSession);
       setAuthReady(true);
@@ -109,21 +130,51 @@ const App: React.FC = () => {
   const loadAppData = useCallback(async () => {
     setLoading(true);
     try {
-      const [transactions, categoryList, goalsList] = await Promise.all([
+      const [transactions, categoryList, goalsList, budgetList, recurringList] = await Promise.all([
         fetchTransactions(),
         fetchCategories(),
         fetchSavingsGoals(),
+        fetchBudgets(),
+        fetchRecurring(),
       ]);
-      setData(transactions);
+
       setCategories(categoryList);
       setSavingsGoals(goalsList);
+      setBudgets(budgetList.datos);
+      setBudgetsDisponibles(budgetList.disponible);
+      setRecurrentes(recurringList.datos);
+      setRecurrentesDisponibles(recurringList.disponible);
+
+      // Los recurrentes que ya tocan este mes se materializan al abrir la app.
+      // Se agregan al estado en vez de recargar: la insercion ya devolvio la
+      // fila completa.
+      let movimientos = transactions;
+      if (recurringList.disponible && recurringList.datos.length > 0) {
+        try {
+          const generadas = await generarRecurrentesPendientes(recurringList.datos);
+          if (generadas.length > 0) {
+            movimientos = [...generadas, ...movimientos];
+            setRecurrentes((await fetchRecurring()).datos);
+            toast.info(
+              generadas.length === 1
+                ? 'Se registró 1 movimiento recurrente de este mes'
+                : `Se registraron ${generadas.length} movimientos recurrentes de este mes`
+            );
+          }
+        } catch (err) {
+          // Que falle la generacion no debe impedir ver las finanzas.
+          console.error('Error generando recurrentes:', err);
+        }
+      }
+
+      setData(movimientos);
       setError(null);
     } catch (err) {
       setError(errorMessage(err, 'No se pudo cargar la información'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   // Se depende del id y no del objeto `session`: Supabase emite una sesion
   // nueva en cada refresco de token (cada hora), y eso recargaria toda la app.
@@ -162,6 +213,15 @@ const App: React.FC = () => {
   const kpis = useMemo(
     () => computeKpis(filteredData, previousData, savingsGoals, rango),
     [filteredData, previousData, savingsGoals, rango]
+  );
+
+  // Proyeccion y presupuestos siempre miran el mes en curso, no el periodo
+  // seleccionado: "voy a cerrar el mes en X" solo tiene sentido para este mes.
+  const proyeccion = useMemo(() => proyeccionCierreMes(data), [data]);
+
+  const presupuestos = useMemo(
+    () => estadoPresupuestos(data, budgets.map(b => ({ categoria: b.categoria, amount: b.amount }))),
+    [data, budgets]
   );
 
   const categoryNames = useMemo(() => categories.map(category => category.name), [categories]);
@@ -251,6 +311,36 @@ const App: React.FC = () => {
     await supabase.auth.signOut();
     setModalState(null);
     navigate('/');
+  };
+
+  const handleSaveBudget = async (categoria: string, amount: number) => {
+    const guardado = await upsertBudget(categoria, amount);
+    setBudgets(prev => {
+      const sinEsa = prev.filter(b => b.id !== guardado.id && b.categoria !== guardado.categoria);
+      return [...sinEsa, guardado].sort((a, b) => a.categoria.localeCompare(b.categoria));
+    });
+  };
+
+  const handleDeleteBudget = async (id: string) => {
+    await deleteBudget(id);
+    setBudgets(prev => prev.filter(b => b.id !== id));
+  };
+
+  const handleCreateRecurring = async (
+    input: Omit<RecurringTransaction, 'id' | 'ultima_generacion' | 'activo'>
+  ) => {
+    const creado = await createRecurring(input);
+    setRecurrentes(prev => [...prev, creado].sort((a, b) => a.dia_del_mes - b.dia_del_mes));
+  };
+
+  const handleToggleRecurring = async (id: string, activo: boolean) => {
+    await toggleRecurring(id, activo);
+    setRecurrentes(prev => prev.map(item => (item.id === id ? { ...item, activo } : item)));
+  };
+
+  const handleDeleteRecurring = async (id: string) => {
+    await deleteRecurring(id);
+    setRecurrentes(prev => prev.filter(item => item.id !== id));
   };
 
   const openCreate = () => setModalState({ mode: 'create' });
@@ -408,6 +498,10 @@ const App: React.FC = () => {
         </div>
       </details>
 
+      <MonthPulse proyeccion={proyeccion} />
+
+      <BudgetsPanel estados={presupuestos} />
+
       <GoalsPanel metas={kpis.metas} />
 
       <Suspense
@@ -417,7 +511,7 @@ const App: React.FC = () => {
           </div>
         }
       >
-        <DashboardCharts data={filteredData} rango={rango} />
+        <DashboardCharts data={filteredData} allData={data} rango={rango} />
       </Suspense>
     </>
   );
@@ -483,15 +577,25 @@ const App: React.FC = () => {
           path="/configuracion"
           element={
             <SettingsPanel
+              email={session.user.email ?? ''}
               categories={categories}
               loading={loading}
               transactions={data}
+              savingsGoals={savingsGoals}
+              budgets={budgets}
+              budgetsDisponibles={budgetsDisponibles}
+              recurrentes={recurrentes}
+              recurrentesDisponibles={recurrentesDisponibles}
               onAddCategory={handleAddCategory}
               onDeleteCategory={handleDeleteCategory}
-              savingsGoals={savingsGoals}
               onAddGoal={handleAddGoal}
               onUpdateGoal={handleUpdateGoal}
               onDeleteGoal={handleDeleteGoal}
+              onSaveBudget={handleSaveBudget}
+              onDeleteBudget={handleDeleteBudget}
+              onCreateRecurring={handleCreateRecurring}
+              onToggleRecurring={handleToggleRecurring}
+              onDeleteRecurring={handleDeleteRecurring}
               onImport={handleImport}
             />
           }
