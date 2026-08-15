@@ -138,6 +138,56 @@ export const proyeccionCierreMes = (
   };
 };
 
+export interface RitmoDelMes {
+  /** Del gasto del mes pasado, cuanto llevas ya. Puede pasar de 100. */
+  avanceGasto: number;
+  /** Cuanto del mes ha transcurrido. Es la marca de referencia. */
+  avanceMes: number;
+  /** Ya gastaste mas que el mes pasado entero. */
+  excedido: boolean;
+  /** La vara de medir, para poder nombrarla en pantalla. */
+  referencia: number;
+}
+
+/**
+ * Los dos numeros de la barra de "Este mes": por donde va tu gasto y por donde
+ * va el calendario.
+ *
+ * BUG QUE ARREGLA. La barra media el gasto contra la PROYECCION del cierre, y
+ * asi no podia decir nada. La proyeccion es `gastado / dias * diasDelMes`, asi
+ * que el cociente `gastado / proyectado` se simplifica SIEMPRE a
+ * `dias / diasDelMes`, que es exactamente donde se pinta la marca. Relleno y
+ * marca coincidian en todos los casos en que la proyeccion mandaba —es decir,
+ * siempre que ibas gastando mas que el mes pasado, justo cuando hay algo que
+ * avisar— y la barra prometia en su comentario avisar de eso.
+ *
+ * El error de fondo: medir algo contra una escala derivada de ese mismo algo.
+ * La referencia tiene que ser independiente del ritmo actual, y la unica que la
+ * tarjeta ya usa —y que el usuario reconoce, porque la ve en "vs el mes
+ * pasado"— es lo que gasto el mes anterior completo.
+ *
+ * Sin mes anterior no hay vara de medir y se devuelve null. Una barra sin
+ * referencia solo puede mentir; mejor no dibujarla.
+ *
+ * Compara contra el TOTAL del mes pasado, no contra su acumulado al mismo dia.
+ * Eso da por hecho que el gasto se reparte parejo, cosa que no pasa —el
+ * arriendo cae el dia 1—, pero es la lectura que responde la pregunta de la
+ * tarjeta: "a este paso, ¿voy a gastar mas que el mes pasado?". El detalle dia
+ * a dia ya esta en la grafica de gasto acumulado.
+ */
+export const ritmoContraMesAnterior = (proyeccion: Proyeccion): RitmoDelMes | null => {
+  const { gastadoHasta, totalMesAnterior, diasTranscurridos, diasDelMes } = proyeccion;
+
+  if (!(totalMesAnterior > 0) || !(diasDelMes > 0)) return null;
+
+  return {
+    avanceGasto: (gastadoHasta / totalMesAnterior) * 100,
+    avanceMes: (diasTranscurridos / diasDelMes) * 100,
+    excedido: gastadoHasta > totalMesAnterior,
+    referencia: totalMesAnterior,
+  };
+};
+
 export interface TendenciaCategoria {
   categoria: string;
   /** Un total por mes, del mas antiguo al mas reciente. */

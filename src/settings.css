@@ -530,6 +530,19 @@
   line-height: 1.5;
 }
 
+/* La barra y su leyenda son una sola unidad: sin la linea de abajo, dos marcas
+   sueltas no dicen contra que se miden. */
+.mes__ritmo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mes__ritmo-nota {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .mes__bar {
   position: relative;
   height: 10px;
@@ -543,6 +556,12 @@
   border-radius: 999px;
   background: linear-gradient(90deg, #58a6ff, #f97316);
   transition: width 0.35s ease;
+}
+
+/* La barra llena hasta el tope no distingue "justo en el limite" de "al doble".
+   El rojo lo dice; el numero exacto esta en la leyenda. */
+.mes__bar.is-excedido .mes__fill {
+  background: linear-gradient(90deg, #f97316, var(--danger));
 }
 
 /* Marca el avance del calendario: si el relleno la pasa, vas gastando

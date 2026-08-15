@@ -4,6 +4,7 @@ import {
   estadoPresupuestos,
   gastoAcumuladoComparado,
   proyeccionCierreMes,
+  ritmoContraMesAnterior,
   tendenciaPorCategoria,
 } from './analytics';
 import type { RecurringTransaction } from '../services/extras';
@@ -144,6 +145,64 @@ describe('proyeccionCierreMes', () => {
     const p = proyeccionCierreMes([], AGOSTO, HOY_15_AGO);
     expect(p.proyectado).toBe(0);
     expect(Number.isFinite(p.ritmoDiario)).toBe(true);
+  });
+});
+
+describe('ritmoContraMesAnterior', () => {
+  /**
+   * La prueba que hubiera cazado el bug original.
+   *
+   * Con la escala anterior —`max(proyectado, ...)`— el relleno salia clavado
+   * sobre la marca SIEMPRE que la proyeccion mandaba, porque
+   * `gastado / proyectado` se simplifica a `dias / diasDelMes`. Aqui el gasto va
+   * disparado y las dos posiciones tienen que separarse de verdad.
+   */
+  it('separa el relleno de la marca cuando se gasta mas rapido que el mes pasado', () => {
+    // 600.000 en 15 dias contra un mes anterior de 800.000: 75% del gasto del
+    // mes pasado con solo 48% del mes transcurrido.
+    const datos = [tx('2026-07-10', 800_000), tx('2026-08-05', 600_000)];
+    const ritmo = ritmoContraMesAnterior(proyeccionCierreMes(datos, AGOSTO, HOY_15_AGO))!;
+
+    expect(ritmo.avanceGasto).toBeCloseTo(75, 5);
+    expect(ritmo.avanceMes).toBeCloseTo((15 / 31) * 100, 5);
+    expect(ritmo.avanceGasto).toBeGreaterThan(ritmo.avanceMes);
+    expect(ritmo.excedido).toBe(false);
+  });
+
+  it('deja el relleno por detras de la marca cuando se gasta mas lento', () => {
+    // 200.000 en 15 dias contra 800.000: 25% del gasto con 48% del mes.
+    const datos = [tx('2026-07-10', 800_000), tx('2026-08-05', 200_000)];
+    const ritmo = ritmoContraMesAnterior(proyeccionCierreMes(datos, AGOSTO, HOY_15_AGO))!;
+
+    expect(ritmo.avanceGasto).toBeCloseTo(25, 5);
+    expect(ritmo.avanceGasto).toBeLessThan(ritmo.avanceMes);
+  });
+
+  it('marca excedido y pasa de 100 al superar el mes anterior completo', () => {
+    const datos = [tx('2026-07-10', 800_000), tx('2026-08-05', 1_200_000)];
+    const ritmo = ritmoContraMesAnterior(proyeccionCierreMes(datos, AGOSTO, HOY_15_AGO))!;
+
+    expect(ritmo.avanceGasto).toBeCloseTo(150, 5);
+    expect(ritmo.excedido).toBe(true);
+    expect(ritmo.referencia).toBe(800_000);
+  });
+
+  it('sin mes anterior no hay vara de medir y no se dibuja', () => {
+    const ritmo = ritmoContraMesAnterior(
+      proyeccionCierreMes([tx('2026-08-05', 300_000)], AGOSTO, HOY_15_AGO)
+    );
+
+    expect(ritmo).toBeNull();
+  });
+
+  it('sin gasto este mes el relleno arranca en cero, no en la marca', () => {
+    const ritmo = ritmoContraMesAnterior(
+      proyeccionCierreMes([tx('2026-07-10', 800_000)], AGOSTO, HOY_15_AGO)
+    )!;
+
+    expect(ritmo.avanceGasto).toBe(0);
+    expect(ritmo.avanceMes).toBeGreaterThan(0);
+    expect(ritmo.excedido).toBe(false);
   });
 });
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import type { DisponibleMes, Proyeccion } from '../lib/analytics';
+import { ritmoContraMesAnterior } from '../lib/analytics';
 import { formatCurrency } from '../lib/format';
 
 interface MesEnCursoProps {
@@ -51,11 +52,10 @@ const MesEnCurso: React.FC<MesEnCursoProps> = ({ disponible, proyeccion }) => {
   const gastaMas = diferenciaVsAnterior > 0;
   const hayComparativo = totalMesAnterior > 0;
 
-  // La barra compara el avance del gasto contra el avance del mes: si el
-  // relleno va por delante de la marca, gastas mas rapido que el calendario.
-  const avanceMes = (diasTranscurridos / diasDelMes) * 100;
-  const referencia = Math.max(proyectado, totalMesAnterior, gastadoHasta, 1);
-  const avanceGasto = (gastadoHasta / referencia) * 100;
+  // La vara de medir es el mes pasado, no la proyeccion: medir el gasto contra
+  // una escala derivada del propio gasto dejaba el relleno clavado sobre la
+  // marca. Ver `ritmoContraMesAnterior`.
+  const ritmo = ritmoContraMesAnterior(proyeccion);
 
   return (
     <section className={`mes ${enDeficit ? 'is-deficit' : ''}`}>
@@ -86,18 +86,34 @@ const MesEnCurso: React.FC<MesEnCursoProps> = ({ disponible, proyeccion }) => {
         </div>
       )}
 
-      <div
-        className="mes__bar"
-        role="img"
-        aria-label={`Llevas ${formatCurrency(gastadoHasta)} gastados de ${formatCurrency(proyectado)} proyectados`}
-      >
-        <div className="mes__fill" style={{ width: `${Math.min(100, avanceGasto)}%` }} />
-        <div
-          className="mes__marker"
-          style={{ left: `${Math.min(100, avanceMes)}%` }}
-          title="Avance del mes"
-        />
-      </div>
+      {ritmo && (
+        <div className="mes__ritmo">
+          <div
+            className={`mes__bar ${ritmo.excedido ? 'is-excedido' : ''}`}
+            role="img"
+            aria-label={
+              `Llevas ${formatCurrency(gastadoHasta)}, el ${Math.round(ritmo.avanceGasto)} % de ` +
+              `los ${formatCurrency(ritmo.referencia)} del mes pasado. Del mes ha pasado el ` +
+              `${Math.round(ritmo.avanceMes)} %.`
+            }
+          >
+            <div className="mes__fill" style={{ width: `${Math.min(100, ritmo.avanceGasto)}%` }} />
+            <div
+              className="mes__marker"
+              style={{ left: `${Math.min(100, ritmo.avanceMes)}%` }}
+              title="Por aquí va el mes"
+            />
+          </div>
+
+          {/* Una barra con dos marcas sin leyenda no se lee. La linea dice que
+              significa cada extremo en las mismas unidades. */}
+          <span className="mes__ritmo-nota">
+            {ritmo.excedido
+              ? `Ya pasaste los ${formatCurrency(ritmo.referencia)} del mes pasado, y aún queda mes`
+              : `${Math.round(ritmo.avanceGasto)} % de lo del mes pasado · el mes va por el ${Math.round(ritmo.avanceMes)} %`}
+          </span>
+        </div>
+      )}
 
       <div className="mes__meta">
         <span>
