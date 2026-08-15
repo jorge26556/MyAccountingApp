@@ -76,14 +76,14 @@
 }
 
 /* ── Lista de secciones en celular ── */
-.settings-list {
+.settings-nav {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 1.25rem;
 }
 
-.settings-list__item {
+.settings-nav__item {
   display: flex;
   align-items: center;
   gap: 0.85rem;
@@ -97,12 +97,12 @@
   cursor: pointer;
 }
 
-.settings-list__item:hover {
+.settings-nav__item:hover {
   transform: none;
   border-color: var(--border-muted);
 }
 
-.settings-list__icon {
+.settings-nav__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -114,23 +114,23 @@
   flex-shrink: 0;
 }
 
-.settings-list__text {
+.settings-nav__text {
   display: flex;
   flex-direction: column;
   min-width: 0;
   flex: 1;
 }
 
-.settings-list__text strong {
+.settings-nav__text strong {
   font-size: 0.98rem;
 }
 
-.settings-list__text small {
+.settings-nav__text small {
   font-size: 0.8rem;
   color: var(--text-secondary);
 }
 
-.settings-list__chevron {
+.settings-nav__chevron {
   color: var(--text-muted);
   flex-shrink: 0;
 }

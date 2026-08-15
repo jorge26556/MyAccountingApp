@@ -10,6 +10,14 @@ interface KpiCardProps {
   isPositive?: boolean;
 }
 
+/**
+ * El icono va en la misma fila que el titulo, no al lado del numero.
+ *
+ * Antes ocupaba una columna propia a la derecha, asi que en el celular —con dos
+ * tarjetas por fila— al importe le quedaban unos 90px y un monto en millones
+ * salia recortado como "$ 5....". Con el icono arriba, el numero dispone del
+ * ancho completo de la tarjeta.
+ */
 const KpiCard: React.FC<KpiCardProps> = ({
   title,
   value,
@@ -19,50 +27,24 @@ const KpiCard: React.FC<KpiCardProps> = ({
   isPositive,
 }) => (
   <div className="card kpi-card">
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: '1rem',
-        gap: '0.75rem',
-      }}
-    >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>
-          {title}
-        </div>
-        <h3
-          style={{
-            fontSize: '1.65rem',
-            fontWeight: 700,
-            color: 'var(--text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            fontVariantNumeric: 'tabular-nums',
-          }}
-          title={value}
-        >
-          {value}
-        </h3>
-      </div>
-      <div
-        style={{
-          backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`,
-          padding: '0.75rem',
-          borderRadius: '10px',
-          color,
-          flexShrink: 0,
-        }}
+    <div className="kpi-card__head">
+      <span className="kpi-card__title">{title}</span>
+      <span
+        className="kpi-card__icon"
+        style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
       >
-        <Icon size={22} />
-      </div>
+        <Icon size={16} />
+      </span>
     </div>
+
+    <strong className="kpi-card__value" title={value}>
+      {value}
+    </strong>
 
     {subtitle && (
       <span
+        className="kpi-card__subtitle"
         style={{
-          fontSize: '0.85rem',
           color:
             isPositive === undefined
               ? 'var(--text-secondary)'

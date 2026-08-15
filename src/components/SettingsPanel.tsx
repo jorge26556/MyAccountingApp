@@ -126,24 +126,24 @@ const SettingsPanel: React.FC<SettingsPanelProps> = props => {
         <section className="settings">
           <h2 className="settings__title">Configuración</h2>
 
-          <nav className="settings-list" aria-label="Secciones de configuración">
+          <nav className="settings-nav" aria-label="Secciones de configuración">
             {SECCIONES.map(seccion => {
               const Icon = seccion.icon;
               return (
                 <button
                   key={seccion.id}
                   type="button"
-                  className="settings-list__item"
+                  className="settings-nav__item"
                   onClick={() => setActive(seccion.id)}
                 >
-                  <span className="settings-list__icon">
+                  <span className="settings-nav__icon">
                     <Icon size={18} />
                   </span>
-                  <span className="settings-list__text">
+                  <span className="settings-nav__text">
                     <strong>{seccion.label}</strong>
                     <small>{seccion.hint}</small>
                   </span>
-                  <ChevronRight size={18} className="settings-list__chevron" />
+                  <ChevronRight size={18} className="settings-nav__chevron" />
                 </button>
               );
             })}
