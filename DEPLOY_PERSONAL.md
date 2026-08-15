@@ -26,14 +26,29 @@ Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 
 ## Estado de las migraciones
 
-Ambas están aplicadas en producción:
+Las tres están aplicadas en producción:
 
 | Archivo | Contiene |
 |---|---|
 | `supabase/schema.sql` | Tablas base, RLS, trigger de perfiles, constraints e índices |
 | `supabase/002_presupuestos_recurrentes_cuenta.sql` | `budgets`, `recurring_transactions` y `delete_own_account()` |
+| `supabase/003_cuentas_saldos.sql` | `accounts`, `transactions.account_id`, `transfer_group` y el backfill |
 
 Para reconstruir la base desde cero, córrelas en ese orden.
+
+### Sobre la 003
+
+Crea una cuenta `Principal` por usuario y le asigna todos los movimientos
+existentes, así que los saldos cuadran desde el primer arranque. Después de
+correrla, esta consulta debe dar cero:
+
+```sql
+select count(*) from public.transactions where account_id is null;
+```
+
+La columna `canal` sigue en la base pero la app ya no la usa: 233 de 236 filas
+tenían el valor por defecto `'Directo'`, o sea que no distinguía nada. Las
+cuentas la reemplazan. No se borró para no perder el poco dato real que guarda.
 
 Después de cualquier migración nueva, regenera los tipos:
 
@@ -92,6 +107,18 @@ select tablename, policyname, roles::text, cmd, qual
 select p.proname, has_function_privilege('anon', p.oid, 'EXECUTE') as anon_puede
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname = 'public' and p.prosecdef;
+```
+
+Y la integridad de los saldos: ningún movimiento debe quedar sin cuenta, y las
+transferencias deben venir siempre de a dos.
+
+```sql
+select count(*) as huerfanos from public.transactions where account_id is null;
+
+select transfer_group, count(*) as patas
+  from public.transactions
+ where transfer_group is not null
+ group by transfer_group having count(*) <> 2;
 ```
 
 El linter de Supabase marca `delete_own_account` como ejecutable por usuarios

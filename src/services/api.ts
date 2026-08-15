@@ -33,7 +33,8 @@ const mapTransaction = (row: Tables<'transactions'>): Transaction => ({
   importe: Number(row.importe),
   estado_pago: row.estado_pago as PaymentStatus,
   descripcion: row.descripcion ?? '',
-  canal: row.canal ?? 'Directo',
+  account_id: row.account_id,
+  transfer_group: row.transfer_group,
 });
 
 /* ────────────────────────────── transacciones ────────────────────────────── */
@@ -72,7 +73,7 @@ export const createTransaction = async (
       importe: Math.abs(transaction.importe),
       estado_pago: transaction.estado_pago,
       descripcion: transaction.descripcion,
-      canal: transaction.canal,
+      account_id: transaction.account_id,
     })
     .select()
     .single();
@@ -91,9 +92,17 @@ export const updateTransaction = async (
 ): Promise<Transaction> => {
   const userId = await requireUserId();
 
-  const payload: Record<string, unknown> = { ...changes };
+  // Campo por campo en vez de esparcir `changes`: asi `transfer_group` nunca
+  // se puede reescribir desde un formulario y romper el par de una
+  // transferencia.
+  const payload: Record<string, unknown> = {};
   if (changes.fecha instanceof Date) payload.fecha = toDateString(changes.fecha);
   if (typeof changes.importe === 'number') payload.importe = Math.abs(changes.importe);
+  if (changes.tipo !== undefined) payload.tipo = changes.tipo;
+  if (changes.categoria !== undefined) payload.categoria = changes.categoria;
+  if (changes.estado_pago !== undefined) payload.estado_pago = changes.estado_pago;
+  if (changes.descripcion !== undefined) payload.descripcion = changes.descripcion;
+  if (changes.account_id !== undefined) payload.account_id = changes.account_id;
 
   const { data, error } = await supabase
     .from('transactions')
@@ -141,7 +150,8 @@ export const createTransactionsBulk = async (
     importe: Math.abs(row.importe),
     estado_pago: row.estado_pago,
     descripcion: row.descripcion,
-    canal: row.canal,
+    account_id: row.account_id,
+    transfer_group: row.transfer_group,
   }));
 
   const { data, error } = await supabase.from('transactions').insert(payload).select('id');

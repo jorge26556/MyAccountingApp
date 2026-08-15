@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Calendar, ChevronDown, ChevronUp, RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { DashboardFilters } from '../types';
+import type { Account, DashboardFilters } from '../types';
 import { toDateString, parseLocalDate } from '../lib/dates';
 import { EMPTY_FILTERS } from '../lib/filters';
 
@@ -8,7 +8,7 @@ interface FiltersBarProps {
   filters: DashboardFilters;
   setFilters: React.Dispatch<React.SetStateAction<DashboardFilters>>;
   availableCategorias: string[];
-  availableCanales: string[];
+  accounts: Account[];
   resultCount: number;
 }
 
@@ -21,8 +21,9 @@ interface ActiveChip {
 
 const formatoCorto = new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'short' });
 
-const buildChips = (filters: DashboardFilters): ActiveChip[] => {
+const buildChips = (filters: DashboardFilters, accounts: Account[]): ActiveChip[] => {
   const chips: ActiveChip[] = [];
+  const nombrePorId = new Map(accounts.map(cuenta => [cuenta.id, cuenta.nombre]));
 
   if (filters.tipo !== 'Todos') {
     chips.push({ key: 'tipo', label: filters.tipo, clear: prev => ({ ...prev, tipo: 'Todos' }) });
@@ -44,11 +45,11 @@ const buildChips = (filters: DashboardFilters): ActiveChip[] => {
     });
   });
 
-  filters.canales.forEach(canal => {
+  filters.cuentas.forEach(cuenta => {
     chips.push({
-      key: `canal-${canal}`,
-      label: canal,
-      clear: prev => ({ ...prev, canales: prev.canales.filter(item => item !== canal) }),
+      key: `cuenta-${cuenta}`,
+      label: nombrePorId.get(cuenta) ?? 'Sin cuenta',
+      clear: prev => ({ ...prev, cuentas: prev.cuentas.filter(item => item !== cuenta) }),
     });
   });
 
@@ -77,7 +78,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
   filters,
   setFilters,
   availableCategorias,
-  availableCanales,
+  accounts,
   resultCount,
 }) => {
   /**
@@ -87,7 +88,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
    */
   const [isOpen, setIsOpen] = useState(false);
 
-  const chips = buildChips(filters);
+  const chips = buildChips(filters, accounts);
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = event.target;
@@ -103,7 +104,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
     }));
   };
 
-  const toggleMulti = (name: 'categorias' | 'canales', value: string) => {
+  const toggleMulti = (name: 'categorias' | 'cuentas', value: string) => {
     setFilters(prev => {
       const current = prev[name];
       return current.includes(value)
@@ -229,7 +230,7 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
                 id="filter-search"
                 type="text"
                 name="activeSearch"
-                placeholder="Descripción, categoría o ID..."
+                placeholder="Descripción o categoría..."
                 className="input-style"
                 value={filters.activeSearch}
                 onChange={handleChange}
@@ -255,23 +256,26 @@ const FiltersBar: React.FC<FiltersBarProps> = ({
             </div>
           </div>
 
-          <div className="filters__group">
-            <span className="filters__group-label">Canales</span>
-            <div className="filters__options">
-              {availableCanales.length === 0 && <span className="filters__empty">Sin canales</span>}
-              {availableCanales.map(canal => (
-                <button
-                  key={canal}
-                  type="button"
-                  aria-pressed={filters.canales.includes(canal)}
-                  onClick={() => toggleMulti('canales', canal)}
-                  className={`badge-btn ${filters.canales.includes(canal) ? 'active' : ''}`}
-                >
-                  {canal}
-                </button>
-              ))}
+          {/* Con una sola cuenta este filtro no puede quitar nada: seria un
+              boton que no hace nada ocupando media pantalla de celular. */}
+          {accounts.length > 1 && (
+            <div className="filters__group">
+              <span className="filters__group-label">Cuentas</span>
+              <div className="filters__options">
+                {accounts.map(cuenta => (
+                  <button
+                    key={cuenta.id}
+                    type="button"
+                    aria-pressed={filters.cuentas.includes(cuenta.id)}
+                    onClick={() => toggleMulti('cuentas', cuenta.id)}
+                    className={`badge-btn ${filters.cuentas.includes(cuenta.id) ? 'active' : ''}`}
+                  >
+                    {cuenta.nombre}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

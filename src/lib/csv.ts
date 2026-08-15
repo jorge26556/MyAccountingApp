@@ -1,10 +1,15 @@
 import { parseLocalDate, toDateString } from './dates';
-import type { PaymentStatus, Transaction, TransactionType } from '../types';
+import type { Account, PaymentStatus, Transaction, TransactionType } from '../types';
 
 /**
  * Export/import CSV. Sin dependencias: el formato es suficientemente acotado
  * (lo genera esta misma app o una hoja de calculo) y meter una libreria de
- * parseo para siete columnas no se justifica.
+ * parseo para ocho columnas no se justifica.
+ *
+ * La columna `canal` se reemplazo por `cuenta`. Los CSV viejos siguen
+ * importando: el parser busca las columnas por nombre y las que no encuentra
+ * las resuelve con el valor por defecto, asi que un respaldo con `canal` entra
+ * igual y sus filas caen en la primera cuenta.
  */
 
 const COLUMNS = [
@@ -13,8 +18,12 @@ const COLUMNS = [
   'categoria',
   'importe',
   'estado_pago',
-  'canal',
+  'cuenta',
   'descripcion',
+  // Vacia en casi todas las filas. Las dos patas de una transferencia comparten
+  // este valor; sin el, reimportar un respaldo las convertiria en un ingreso y
+  // un gasto sueltos y descuadraria las metricas.
+  'transferencia',
 ] as const;
 
 /** Marca de orden de bytes que Excel antepone a los CSV en UTF-8. */
@@ -24,8 +33,9 @@ export const BOM = '\uFEFF';
 const escapeCell = (value: string): string =>
   /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 
-export const toCsv = (transactions: Transaction[]): string => {
+export const toCsv = (transactions: Transaction[], accounts: Account[] = []): string => {
   const header = COLUMNS.join(',');
+  const nombrePorId = new Map(accounts.map(cuenta => [cuenta.id, cuenta.nombre]));
 
   const rows = transactions.map(item =>
     [
@@ -34,8 +44,9 @@ export const toCsv = (transactions: Transaction[]): string => {
       item.categoria,
       String(item.importe),
       item.estado_pago,
-      item.canal,
+      (item.account_id && nombrePorId.get(item.account_id)) || '',
       item.descripcion,
+      item.transfer_group ?? '',
     ]
       .map(escapeCell)
       .join(',')
@@ -44,9 +55,13 @@ export const toCsv = (transactions: Transaction[]): string => {
   return [header, ...rows].join('\r\n');
 };
 
-export const downloadCsv = (transactions: Transaction[], filename: string): void => {
+export const downloadCsv = (
+  transactions: Transaction[],
+  filename: string,
+  accounts: Account[] = []
+): void => {
   // El BOM hace que Excel en Windows reconozca UTF-8 y no rompa las tildes.
-  const blob = new Blob([BOM + toCsv(transactions)], {
+  const blob = new Blob([BOM + toCsv(transactions, accounts)], {
     type: 'text/csv;charset=utf-8;',
   });
 
@@ -102,9 +117,16 @@ export interface CsvParseResult {
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export const parseCsv = (contenido: string): CsvParseResult => {
+export const parseCsv = (contenido: string, accounts: Account[] = []): CsvParseResult => {
   const rows: Array<Omit<Transaction, 'id' | 'user_id'>> = [];
   const errors: string[] = [];
+
+  // Se busca por nombre normalizado: el usuario escribe "nequi" en la hoja de
+  // calculo y la cuenta se llama "Nequi".
+  const idPorNombre = new Map(
+    accounts.map(cuenta => [cuenta.nombre.trim().toLowerCase(), cuenta.id])
+  );
+  const cuentaPorDefecto = accounts[0]?.id ?? null;
 
   const lines = contenido
     .replace(/^\uFEFF/, '')
@@ -173,14 +195,17 @@ export const parseCsv = (contenido: string): CsvParseResult => {
     const estadoRaw = get('estado_pago');
     const estado_pago: PaymentStatus = estadoRaw.toLowerCase() === 'pendiente' ? 'Pendiente' : 'Pagado';
 
+    const nombreCuenta = get('cuenta').trim().toLowerCase();
+
     rows.push({
       fecha,
       tipo,
       categoria,
       importe,
       estado_pago,
-      canal: get('canal') || 'Directo',
+      account_id: idPorNombre.get(nombreCuenta) ?? cuentaPorDefecto,
       descripcion: get('descripcion'),
+      transfer_group: get('transferencia') || null,
     });
   });
 

@@ -4,14 +4,13 @@ import type { RecurringTransaction } from '../../services/extras';
 import { MENSAJE_MIGRACION_PENDIENTE } from '../../services/extras';
 import { formatCurrency } from '../../lib/format';
 import { errorMessage, useToast } from '../../lib/toast';
-import type { TransactionType } from '../../types';
-
-const CANALES = ['Directo', 'Transferencia', 'Tarjeta', 'Efectivo', 'Nequi', 'Daviplata', 'Otro'];
+import type { Account, TransactionType } from '../../types';
 
 interface RecurringSectionProps {
   disponible: boolean;
   recurrentes: RecurringTransaction[];
   categorias: string[];
+  cuentas: Account[];
   onCreate: (input: Omit<RecurringTransaction, 'id' | 'ultima_generacion' | 'activo'>) => Promise<void>;
   onToggle: (id: string, activo: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
@@ -27,6 +26,7 @@ const RecurringSection: React.FC<RecurringSectionProps> = ({
   disponible,
   recurrentes,
   categorias,
+  cuentas,
   onCreate,
   onToggle,
   onDelete,
@@ -36,11 +36,13 @@ const RecurringSection: React.FC<RecurringSectionProps> = ({
     tipo: 'Gasto' as TransactionType,
     categoria: '',
     importe: '',
-    canal: 'Directo',
+    account_id: cuentas[0]?.id ?? '',
     descripcion: '',
     dia_del_mes: '1',
   });
   const [guardando, setGuardando] = useState(false);
+
+  const nombrePorId = new Map(cuentas.map(cuenta => [cuenta.id, cuenta.nombre]));
 
   if (!disponible) {
     return (
@@ -70,7 +72,7 @@ const RecurringSection: React.FC<RecurringSectionProps> = ({
         tipo: form.tipo,
         categoria: form.categoria,
         importe: Number(form.importe),
-        canal: form.canal,
+        account_id: form.account_id || null,
         descripcion: form.descripcion,
         dia_del_mes: Number(form.dia_del_mes),
       });
@@ -143,10 +145,15 @@ const RecurringSection: React.FC<RecurringSectionProps> = ({
               </select>
             </div>
             <div>
-              <label className="settings-field__label" htmlFor="rec-canal">Canal</label>
-              <select id="rec-canal" className="input-style" value={form.canal} onChange={e => set('canal', e.target.value)}>
-                {CANALES.map(canal => (
-                  <option key={canal} value={canal}>{canal}</option>
+              <label className="settings-field__label" htmlFor="rec-cuenta">Cuenta</label>
+              <select
+                id="rec-cuenta"
+                className="input-style"
+                value={form.account_id}
+                onChange={e => set('account_id', e.target.value)}
+              >
+                {cuentas.map(cuenta => (
+                  <option key={cuenta.id} value={cuenta.id}>{cuenta.nombre}</option>
                 ))}
               </select>
             </div>
@@ -207,7 +214,8 @@ const RecurringSection: React.FC<RecurringSectionProps> = ({
                 </strong>
                 <p>
                   {item.tipo === 'Gasto' ? '−' : '+'}
-                  {formatCurrency(item.importe)} · día {item.dia_del_mes} · {item.canal}
+                  {formatCurrency(item.importe)} · día {item.dia_del_mes}
+                  {item.account_id && ` · ${nombrePorId.get(item.account_id) ?? 'Sin cuenta'}`}
                   {!item.activo && ' · pausado'}
                 </p>
               </div>

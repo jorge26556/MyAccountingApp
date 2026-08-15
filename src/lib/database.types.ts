@@ -19,6 +19,39 @@ export type Database = {
   };
   public: {
     Tables: {
+      accounts: {
+        Row: {
+          archivada: boolean;
+          created_at: string;
+          id: string;
+          nombre: string;
+          orden: number;
+          saldo_inicial: number;
+          tipo: string;
+          user_id: string;
+        };
+        Insert: {
+          archivada?: boolean;
+          created_at?: string;
+          id?: string;
+          nombre: string;
+          orden?: number;
+          saldo_inicial?: number;
+          tipo?: string;
+          user_id: string;
+        };
+        Update: {
+          archivada?: boolean;
+          created_at?: string;
+          id?: string;
+          nombre?: string;
+          orden?: number;
+          saldo_inicial?: number;
+          tipo?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       budgets: {
         Row: {
           amount: number;
@@ -90,6 +123,7 @@ export type Database = {
       };
       recurring_transactions: {
         Row: {
+          account_id: string | null;
           activo: boolean;
           canal: string;
           categoria: string;
@@ -103,6 +137,7 @@ export type Database = {
           user_id: string;
         };
         Insert: {
+          account_id?: string | null;
           activo?: boolean;
           canal?: string;
           categoria: string;
@@ -116,6 +151,7 @@ export type Database = {
           user_id: string;
         };
         Update: {
+          account_id?: string | null;
           activo?: boolean;
           canal?: string;
           categoria?: string;
@@ -156,6 +192,7 @@ export type Database = {
       };
       transactions: {
         Row: {
+          account_id: string | null;
           canal: string | null;
           categoria: string;
           created_at: string | null;
@@ -165,9 +202,11 @@ export type Database = {
           id: string;
           importe: number;
           tipo: string;
+          transfer_group: string | null;
           user_id: string;
         };
         Insert: {
+          account_id?: string | null;
           canal?: string | null;
           categoria: string;
           created_at?: string | null;
@@ -177,9 +216,11 @@ export type Database = {
           id?: string;
           importe: number;
           tipo: string;
+          transfer_group?: string | null;
           user_id: string;
         };
         Update: {
+          account_id?: string | null;
           canal?: string | null;
           categoria?: string;
           created_at?: string | null;
@@ -189,6 +230,7 @@ export type Database = {
           id?: string;
           importe?: number;
           tipo?: string;
+          transfer_group?: string | null;
           user_id?: string;
         };
         Relationships: [];

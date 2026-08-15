@@ -105,7 +105,8 @@ export interface RecurringTransaction {
   tipo: 'Ingreso' | 'Gasto';
   categoria: string;
   importe: number;
-  canal: string;
+  /** Cuenta de la que sale (o a la que entra) cada mes. */
+  account_id: string | null;
   descripcion: string;
   dia_del_mes: number;
   activo: boolean;
@@ -117,7 +118,7 @@ const mapRecurring = (row: Record<string, unknown>): RecurringTransaction => ({
   tipo: row.tipo as 'Ingreso' | 'Gasto',
   categoria: row.categoria as string,
   importe: Number(row.importe),
-  canal: (row.canal as string) ?? 'Directo',
+  account_id: (row.account_id as string) ?? null,
   descripcion: (row.descripcion as string) ?? '',
   dia_del_mes: Number(row.dia_del_mes),
   activo: Boolean(row.activo),
@@ -154,7 +155,7 @@ export const createRecurring = async (
       tipo: input.tipo,
       categoria: input.categoria.trim(),
       importe: Math.abs(input.importe),
-      canal: input.canal,
+      account_id: input.account_id,
       descripcion: input.descripcion.trim(),
       dia_del_mes: input.dia_del_mes,
     })
@@ -214,6 +215,8 @@ export const deleteRecurring = async (id: string): Promise<void> => {
  */
 export const generarRecurrentesPendientes = async (
   recurrentes: RecurringTransaction[],
+  /** Adonde van los recurrentes creados antes de que existieran las cuentas. */
+  cuentaPorDefecto: string | null = null,
   hoy: Date = today()
 ): Promise<Transaction[]> => {
   const userId = await requireUserId();
@@ -254,7 +257,7 @@ export const generarRecurrentesPendientes = async (
         categoria: plantilla.categoria,
         importe: plantilla.importe,
         estado_pago: 'Pagado',
-        canal: plantilla.canal,
+        account_id: plantilla.account_id ?? cuentaPorDefecto,
         descripcion: plantilla.descripcion,
       })
       .select()
@@ -274,7 +277,8 @@ export const generarRecurrentesPendientes = async (
       importe: Number(data.importe),
       estado_pago: data.estado_pago as 'Pagado' | 'Pendiente',
       descripcion: data.descripcion ?? '',
-      canal: data.canal ?? 'Directo',
+      account_id: data.account_id,
+      transfer_group: data.transfer_group,
     });
   }
 

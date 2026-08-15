@@ -8,12 +8,15 @@ import {
   Repeat,
   Target,
   UserCog,
+  Wallet,
 } from 'lucide-react';
-import type { Category, SavingsGoal, Transaction } from '../types';
+import type { Account, AccountType, Category, SavingsGoal, Transaction } from '../types';
+import type { SaldoCuenta } from '../lib/accounts';
 import type { Budget, RecurringTransaction } from '../services/extras';
 import { useIsMobile } from '../lib/useMediaQuery';
 
 import AccountSection from './settings/AccountSection';
+import AccountsSection from './settings/AccountsSection';
 import CategoriesSection from './settings/CategoriesSection';
 import GoalsSection from './settings/GoalsSection';
 import BudgetsSection from './settings/BudgetsSection';
@@ -30,6 +33,12 @@ interface SettingsPanelProps {
   budgetsDisponibles: boolean;
   recurrentes: RecurringTransaction[];
   recurrentesDisponibles: boolean;
+  saldos: SaldoCuenta[];
+  cuentas: Account[];
+  cuentasDisponibles: boolean;
+  onCreateAccount: (input: { nombre: string; tipo: AccountType; saldoInicial: number }) => Promise<void>;
+  onUpdateAccount: (id: string, changes: Partial<Account>) => Promise<void>;
+  onDeleteAccount: (id: string, reassignTo?: string) => Promise<void>;
   onAddCategory: (name: string) => Promise<void>;
   onDeleteCategory: (name: string, reassignTo?: string) => Promise<void>;
   onAddGoal: (name: string, amount: number) => Promise<void>;
@@ -45,15 +54,23 @@ interface SettingsPanelProps {
   onImport: (rows: Array<Omit<Transaction, 'id' | 'user_id'>>) => Promise<number>;
 }
 
-type SectionId = 'cuenta' | 'categorias' | 'metas' | 'presupuestos' | 'recurrentes' | 'datos';
+type SectionId =
+  | 'cuentas'
+  | 'cuenta'
+  | 'categorias'
+  | 'metas'
+  | 'presupuestos'
+  | 'recurrentes'
+  | 'datos';
 
 const SECCIONES: Array<{ id: SectionId; label: string; hint: string; icon: React.ElementType }> = [
-  { id: 'cuenta', label: 'Cuenta', hint: 'Perfil, contraseña y baja', icon: UserCog },
+  { id: 'cuentas', label: 'Cuentas', hint: 'Dónde está tu plata y cuánto hay', icon: Wallet },
   { id: 'categorias', label: 'Categorías', hint: 'Cómo clasificas tus movimientos', icon: FolderCog },
   { id: 'presupuestos', label: 'Presupuestos', hint: 'Topes mensuales por categoría', icon: PiggyBank },
   { id: 'metas', label: 'Metas de ahorro', hint: 'Objetivos a alcanzar', icon: Target },
   { id: 'recurrentes', label: 'Recurrentes', hint: 'Movimientos que se repiten', icon: Repeat },
   { id: 'datos', label: 'Datos', hint: 'Respaldo e importación', icon: Database },
+  { id: 'cuenta', label: 'Mi perfil', hint: 'Correo, contraseña y baja', icon: UserCog },
 ];
 
 /**
@@ -69,10 +86,20 @@ const SettingsPanel: React.FC<SettingsPanelProps> = props => {
   const isMobile = useIsMobile();
   const [active, setActive] = useState<SectionId | null>(null);
 
-  const seccionActiva: SectionId = active ?? 'cuenta';
+  const seccionActiva: SectionId = active ?? 'cuentas';
 
   const contenido = (id: SectionId) => {
     switch (id) {
+      case 'cuentas':
+        return (
+          <AccountsSection
+            disponible={props.cuentasDisponibles}
+            saldos={props.saldos}
+            onCreate={props.onCreateAccount}
+            onUpdate={props.onUpdateAccount}
+            onDelete={props.onDeleteAccount}
+          />
+        );
       case 'cuenta':
         return <AccountSection email={props.email} />;
       case 'categorias':
@@ -109,13 +136,20 @@ const SettingsPanel: React.FC<SettingsPanelProps> = props => {
             disponible={props.recurrentesDisponibles}
             recurrentes={props.recurrentes}
             categorias={props.categories.map(c => c.name)}
+            cuentas={props.cuentas}
             onCreate={props.onCreateRecurring}
             onToggle={props.onToggleRecurring}
             onDelete={props.onDeleteRecurring}
           />
         );
       case 'datos':
-        return <DataSection transactions={props.transactions} onImport={props.onImport} />;
+        return (
+          <DataSection
+            transactions={props.transactions}
+            accounts={props.cuentas}
+            onImport={props.onImport}
+          />
+        );
     }
   };
 

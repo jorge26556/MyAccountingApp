@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  disponibleDelMes,
   estadoPresupuestos,
   gastoAcumuladoComparado,
   proyeccionCierreMes,
   tendenciaPorCategoria,
 } from './analytics';
+import type { RecurringTransaction } from '../services/extras';
 import type { Transaction } from '../types';
 
 let seq = 0;
@@ -19,10 +21,24 @@ const tx = (fecha: string, importe: number, over: Partial<Transaction> = {}): Tr
     importe,
     estado_pago: 'Pagado',
     descripcion: '',
-    canal: 'Nequi',
+    account_id: 'cuenta-1',
+    transfer_group: null,
     ...over,
   };
 };
+
+const recurrente = (over: Partial<RecurringTransaction> = {}): RecurringTransaction => ({
+  id: `rec-${++seq}`,
+  tipo: 'Gasto',
+  categoria: 'Servicios',
+  importe: 50_000,
+  account_id: 'cuenta-1',
+  descripcion: '',
+  dia_del_mes: 20,
+  activo: true,
+  ultima_generacion: null,
+  ...over,
+});
 
 // Fechas fijas: todas las funciones reciben "hoy" para no depender del reloj.
 const AGOSTO = new Date(2026, 7, 1);
@@ -261,5 +277,184 @@ describe('estadoPresupuestos', () => {
       HOY_15_AGO
     );
     expect(estado.find(e => e.categoria === 'Mercado')!.gastado).toBe(100_000);
+  });
+});
+
+describe('analitica · transferencias', () => {
+  const transferencia = (fecha: string, importe: number, over: Partial<Transaction> = {}) =>
+    tx(fecha, importe, { transfer_group: 'grupo-1', categoria: 'Transferencia', ...over });
+
+  it('una transferencia no cuenta como gasto en la proyeccion del mes', () => {
+    const conTransferencia = proyeccionCierreMes(
+      [tx('2026-08-05', 300_000), transferencia('2026-08-06', 2_000_000)],
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(conTransferencia.gastadoHasta).toBe(300_000);
+  });
+
+  it('tampoco consume presupuesto', () => {
+    const estado = estadoPresupuestos(
+      [transferencia('2026-08-06', 900_000, { categoria: 'Mercado' })],
+      [{ categoria: 'Mercado', amount: 600_000 }],
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(estado[0].gastado).toBe(0);
+    expect(estado[0].excedido).toBe(false);
+  });
+});
+
+describe('disponibleDelMes', () => {
+  it('en superavit reparte lo que sobra entre los dias que quedan', () => {
+    const resultado = disponibleDelMes(
+      [
+        tx('2026-08-01', 3_000_000, { tipo: 'Ingreso' }),
+        tx('2026-08-05', 1_000_000),
+      ],
+      [],
+      3_000_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.flujoDelMes).toBe(2_000_000);
+    expect(resultado.enDeficit).toBe(false);
+    // Del 15 al 31 quedan 17 dias contando hoy.
+    expect(resultado.diasRestantes).toBe(17);
+    expect(resultado.porDia).toBeCloseTo(2_000_000 / 17);
+  });
+
+  it('descuenta los recurrentes que aun no han caido este mes', () => {
+    const resultado = disponibleDelMes(
+      [tx('2026-08-01', 3_000_000, { tipo: 'Ingreso' })],
+      [recurrente({ importe: 500_000, dia_del_mes: 20 })],
+      3_000_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.comprometido).toBe(500_000);
+    expect(resultado.flujoDelMes).toBe(2_500_000);
+  });
+
+  it('NO descuenta dos veces un recurrente que ya se materializo', () => {
+    // Si ya se genero, existe como transaccion real. Contarlo tambien como
+    // compromiso lo cobraria dos veces y el disponible saldria bajo sin motivo.
+    const yaGenerado = recurrente({
+      importe: 500_000,
+      dia_del_mes: 4,
+      ultima_generacion: new Date(2026, 7, 1),
+    });
+
+    const resultado = disponibleDelMes(
+      [tx('2026-08-01', 3_000_000, { tipo: 'Ingreso' }), tx('2026-08-04', 500_000)],
+      [yaGenerado],
+      2_500_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.comprometido).toBe(0);
+    expect(resultado.gastosDelMes).toBe(500_000);
+    expect(resultado.flujoDelMes).toBe(2_500_000);
+  });
+
+  it('un recurrente pausado no compromete nada', () => {
+    const resultado = disponibleDelMes(
+      [],
+      [recurrente({ importe: 500_000, activo: false })],
+      1_000_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.comprometido).toBe(0);
+    expect(resultado.costoFijoMensual).toBe(0);
+  });
+
+  it('en deficit no ofrece presupuesto diario: esa plata sale del ahorro', () => {
+    const resultado = disponibleDelMes(
+      [
+        tx('2026-08-01', 2_000_000, { tipo: 'Ingreso' }),
+        tx('2026-08-05', 6_000_000),
+      ],
+      [],
+      3_000_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.enDeficit).toBe(true);
+    expect(resultado.flujoDelMes).toBe(-4_000_000);
+    expect(resultado.margenDelMes).toBe(0);
+    expect(resultado.porDia).toBe(0);
+    // Pero el tope real sigue siendo lo que hay en las cuentas.
+    expect(resultado.disponible).toBe(3_000_000);
+  });
+
+  it('el margen nunca supera lo que de verdad hay en las cuentas', () => {
+    // Ingresos de 5M en el mes pero solo 200.000 en el banco: decirle que puede
+    // gastar 5M seria mentira, la plata ya no esta.
+    const resultado = disponibleDelMes(
+      [tx('2026-08-01', 5_000_000, { tipo: 'Ingreso' })],
+      [],
+      200_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.flujoDelMes).toBe(5_000_000);
+    expect(resultado.margenDelMes).toBe(200_000);
+  });
+
+  it('los pendientes vencidos de meses anteriores siguen comprometiendo plata', () => {
+    // Un recibo de julio sin pagar no deja de existir en agosto.
+    const resultado = disponibleDelMes(
+      [tx('2026-07-28', 400_000, { estado_pago: 'Pendiente' })],
+      [],
+      1_000_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.comprometido).toBe(400_000);
+    expect(resultado.disponible).toBe(600_000);
+  });
+
+  it('costoFijoMensual suma todos los recurrentes de gasto activos', () => {
+    const resultado = disponibleDelMes(
+      [],
+      [
+        recurrente({ importe: 1_830_000, dia_del_mes: 1, ultima_generacion: new Date(2026, 7, 1) }),
+        recurrente({ importe: 100_690, dia_del_mes: 20 }),
+        recurrente({ importe: 3_000_000, tipo: 'Ingreso', dia_del_mes: 30 }),
+      ],
+      500_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.costoFijoMensual).toBe(1_930_690);
+    expect(resultado.porCobrar).toBe(3_000_000);
+  });
+
+  it('una transferencia no cuenta como gasto del mes', () => {
+    const resultado = disponibleDelMes(
+      [
+        tx('2026-08-01', 3_000_000, { tipo: 'Ingreso' }),
+        tx('2026-08-06', 1_000_000, { transfer_group: 'g1' }),
+        tx('2026-08-06', 1_000_000, { tipo: 'Ingreso', transfer_group: 'g1' }),
+      ],
+      [],
+      3_000_000,
+      AGOSTO,
+      HOY_15_AGO
+    );
+
+    expect(resultado.gastosDelMes).toBe(0);
+    expect(resultado.ingresosDelMes).toBe(3_000_000);
   });
 });

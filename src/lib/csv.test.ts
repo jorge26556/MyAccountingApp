@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { BOM, parseCsv, parseCsvLine, toCsv } from './csv';
 import { toDateString } from './dates';
-import type { Transaction } from '../types';
+import type { Account, Transaction } from '../types';
+
+const CUENTAS: Account[] = [
+  { id: 'cta-nequi', nombre: 'Nequi', tipo: 'Banco', saldoInicial: 0, archivada: false, orden: 0 },
+  { id: 'cta-efectivo', nombre: 'Efectivo', tipo: 'Efectivo', saldoInicial: 0, archivada: false, orden: 1 },
+];
 
 const tx = (over: Partial<Transaction> = {}): Transaction => ({
   id: 'id-1',
@@ -12,7 +17,8 @@ const tx = (over: Partial<Transaction> = {}): Transaction => ({
   importe: 50000,
   estado_pago: 'Pagado',
   descripcion: 'Compra semanal',
-  canal: 'Nequi',
+  account_id: 'cta-nequi',
+  transfer_group: null,
   ...over,
 });
 
@@ -36,37 +42,67 @@ describe('parseCsvLine', () => {
 });
 
 describe('toCsv', () => {
-  it('escribe encabezado y fila', () => {
-    const csv = toCsv([tx()]);
+  it('escribe encabezado y fila, con el NOMBRE de la cuenta', () => {
+    const csv = toCsv([tx()], CUENTAS);
     const [header, row] = csv.split('\r\n');
 
-    expect(header).toBe('fecha,tipo,categoria,importe,estado_pago,canal,descripcion');
-    expect(row).toBe('2026-08-14,Gasto,Mercado,50000,Pagado,Nequi,Compra semanal');
+    expect(header).toBe('fecha,tipo,categoria,importe,estado_pago,cuenta,descripcion,transferencia');
+    // El uuid de la cuenta no le sirve a nadie en una hoja de calculo.
+    expect(row).toBe('2026-08-14,Gasto,Mercado,50000,Pagado,Nequi,Compra semanal,');
   });
 
   it('entrecomilla descripciones con comas', () => {
-    const csv = toCsv([tx({ descripcion: 'Pan, leche y huevos' })]);
+    const csv = toCsv([tx({ descripcion: 'Pan, leche y huevos' })], CUENTAS);
     expect(csv).toContain('"Pan, leche y huevos"');
   });
 
   it('usa la fecha local, sin corrimiento', () => {
-    const csv = toCsv([tx({ fecha: new Date(2026, 0, 1) })]);
+    const csv = toCsv([tx({ fecha: new Date(2026, 0, 1) })], CUENTAS);
     expect(csv).toContain('2026-01-01');
   });
 });
 
 describe('parseCsv', () => {
-  const header = 'fecha,tipo,categoria,importe,estado_pago,canal,descripcion';
+  const header = 'fecha,tipo,categoria,importe,estado_pago,cuenta,descripcion';
 
   it('hace round-trip con toCsv', () => {
     const original = [tx(), tx({ tipo: 'Ingreso', categoria: 'Extra', importe: 1200000 })];
-    const { rows, errors } = parseCsv(toCsv(original));
+    const { rows, errors } = parseCsv(toCsv(original, CUENTAS), CUENTAS);
 
     expect(errors).toEqual([]);
     expect(rows).toHaveLength(2);
     expect(toDateString(rows[0].fecha)).toBe('2026-08-14');
     expect(rows[1].tipo).toBe('Ingreso');
     expect(rows[1].importe).toBe(1200000);
+  });
+
+  it('el round-trip conserva la cuenta y el par de una transferencia', () => {
+    // Sin la columna `transferencia`, reimportar un respaldo convertiria las dos
+    // patas en un ingreso y un gasto sueltos, inflando ambos totales.
+    const original = [
+      tx({ account_id: 'cta-efectivo' }),
+      tx({ transfer_group: 'grupo-9', categoria: 'Transferencia' }),
+    ];
+    const { rows } = parseCsv(toCsv(original, CUENTAS), CUENTAS);
+
+    expect(rows[0].account_id).toBe('cta-efectivo');
+    expect(rows[1].transfer_group).toBe('grupo-9');
+    expect(rows[0].transfer_group).toBeNull();
+  });
+
+  it('resuelve el nombre de la cuenta sin importar mayusculas ni espacios', () => {
+    const { rows } = parseCsv(`${header}\n2026-08-14,Gasto,Mercado,100,Pagado,  nequi ,x`, CUENTAS);
+    expect(rows[0].account_id).toBe('cta-nequi');
+  });
+
+  it('un CSV viejo con columna "canal" sigue importando', () => {
+    // Los respaldos anteriores a las cuentas no tienen columna `cuenta`. Sus
+    // filas caen en la primera cuenta en vez de rechazarse.
+    const viejo = 'fecha,tipo,categoria,importe,estado_pago,canal,descripcion';
+    const { rows, errors } = parseCsv(`${viejo}\n2026-08-14,Gasto,Mercado,100,Pagado,Directo,x`, CUENTAS);
+
+    expect(errors).toEqual([]);
+    expect(rows[0].account_id).toBe('cta-nequi');
   });
 
   it('acepta importes en formato es-CO', () => {
@@ -114,9 +150,15 @@ describe('parseCsv', () => {
   });
 
   it('usa valores por defecto para columnas opcionales ausentes', () => {
-    const { rows } = parseCsv('fecha,tipo,categoria,importe\n2026-08-14,Gasto,Mercado,100');
-    expect(rows[0].canal).toBe('Directo');
+    const { rows } = parseCsv('fecha,tipo,categoria,importe\n2026-08-14,Gasto,Mercado,100', CUENTAS);
+    expect(rows[0].account_id).toBe('cta-nequi');
     expect(rows[0].estado_pago).toBe('Pagado');
     expect(rows[0].descripcion).toBe('');
+    expect(rows[0].transfer_group).toBeNull();
+  });
+
+  it('sin cuentas configuradas deja account_id en null en vez de inventarse una', () => {
+    const { rows } = parseCsv('fecha,tipo,categoria,importe\n2026-08-14,Gasto,Mercado,100');
+    expect(rows[0].account_id).toBeNull();
   });
 });

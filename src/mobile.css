@@ -335,33 +335,40 @@
   padding: 1.1rem;
 }
 
-.kpi-more {
-  margin-bottom: 1.5rem;
+/* ──────────────── Selector de tipo dentro del modal ─────────────────────── */
+
+.modal-modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
 }
 
-.kpi-more > summary {
-  cursor: pointer;
-  padding: 0.7rem 0.9rem;
-  border-radius: 10px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  color: var(--text-secondary);
-  font-size: 0.88rem;
+.modal-mode {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.7rem 0.35rem;
+  border: 1.5px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.85rem;
   font-weight: 600;
-  list-style: none;
+  cursor: pointer;
+  min-width: 0;
 }
 
-.kpi-more > summary::-webkit-details-marker {
-  display: none;
+.modal-mode:hover {
+  transform: none;
 }
 
-.kpi-more > summary:hover {
-  color: var(--text-primary);
-  border-color: var(--border-muted);
-}
-
-.kpi-more[open] > summary {
-  margin-bottom: 1rem;
+@media (max-width: 400px) {
+  /* "Entre cuentas" no cabe junto a los otros dos con el icono al lado. */
+  .modal-mode {
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.78rem;
+    padding: 0.6rem 0.25rem;
+  }
 }
 
 /* ───────────────────── Movimientos: tabla y tarjetas ────────────────────── */
@@ -426,6 +433,13 @@
   color: var(--success);
 }
 
+/* Ni rojo ni verde: mover plata entre cuentas propias no te hace mas rico ni
+   mas pobre, y pintarlo como gasto o ingreso confunde al leer la lista. */
+.tx-table__importe.is-transfer,
+.tx-card__importe.is-transfer {
+  color: var(--accent-primary);
+}
+
 .tx-table__desc {
   color: var(--text-secondary);
   font-size: 0.85rem;
@@ -487,7 +501,9 @@
 
 .tx-card__categoria {
   font-size: 0.98rem;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .tx-card__desc {

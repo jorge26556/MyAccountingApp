@@ -1,15 +1,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import type { Session } from '@supabase/supabase-js';
-import {
-  Activity,
-  AlertCircle,
-  DollarSign,
-  Plus,
-  Target,
-  TrendingDown,
-  TrendingUp,
-} from 'lucide-react';
+import { AlertCircle, Plus, TrendingDown, TrendingUp } from 'lucide-react';
 
 import FiltersBar from './components/FiltersBar';
 import KpiCard from './components/KpiCard';
@@ -17,9 +9,12 @@ import PeriodSelector from './components/PeriodSelector';
 import SettingsPanel from './components/SettingsPanel';
 import TopNav from './components/TopNav';
 import TransactionModal from './components/TransactionModal';
+import type { TransferInput } from './components/TransactionModal';
 import TransactionsTable from './components/TransactionsTable';
 import GoalsPanel from './components/GoalsPanel';
-import MonthPulse from './components/MonthPulse';
+import MesEnCurso from './components/MesEnCurso';
+import SaldoHero from './components/SaldoHero';
+import AgendaPanel from './components/AgendaPanel';
 import BudgetsPanel from './components/BudgetsPanel';
 import AccountMenu from './components/AccountMenu';
 
@@ -33,7 +28,15 @@ import { errorMessage, useToast } from './lib/toast';
 import { supabase } from './lib/supabase';
 import { applyFilters, computeKpis, previousPeriod, resolvePeriod } from './lib/kpis';
 import { EMPTY_FILTERS } from './lib/filters';
-import { estadoPresupuestos, proyeccionCierreMes } from './lib/analytics';
+import { disponibleDelMes, estadoPresupuestos, proyeccionCierreMes } from './lib/analytics';
+import { construirAgenda } from './lib/agenda';
+import {
+  cuentasActivas,
+  movimientosSinCuenta,
+  saldoTotal,
+  saldosPorCuenta,
+  sinTransferencias,
+} from './lib/accounts';
 import { formatCurrency, formatPercent } from './lib/format';
 import { downloadCsv } from './lib/csv';
 import { toDateString, today } from './lib/dates';
@@ -52,6 +55,14 @@ import {
   updateTransaction,
 } from './services/api';
 import {
+  createAccount,
+  createTransfer,
+  deleteAccount,
+  deleteTransfer,
+  fetchAccounts,
+  updateAccount,
+} from './services/accounts';
+import {
   createRecurring,
   deleteBudget,
   deleteRecurring,
@@ -63,7 +74,14 @@ import {
   type Budget,
   type RecurringTransaction,
 } from './services/extras';
-import type { Category, DashboardFilters, SavingsGoal, Transaction } from './types';
+import type {
+  Account,
+  AccountType,
+  Category,
+  DashboardFilters,
+  SavingsGoal,
+  Transaction,
+} from './types';
 
 type ModalState =
   | null
@@ -86,6 +104,8 @@ const App: React.FC = () => {
   const [budgetsDisponibles, setBudgetsDisponibles] = useState(false);
   const [recurrentes, setRecurrentes] = useState<RecurringTransaction[]>([]);
   const [recurrentesDisponibles, setRecurrentesDisponibles] = useState(false);
+  const [cuentas, setCuentas] = useState<Account[]>([]);
+  const [cuentasDisponibles, setCuentasDisponibles] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -139,6 +159,7 @@ const App: React.FC = () => {
         setSavingsGoals([]);
         setBudgets([]);
         setRecurrentes([]);
+        setCuentas([]);
       }
       setSession(nextSession);
       setAuthReady(true);
@@ -152,13 +173,15 @@ const App: React.FC = () => {
   const loadAppData = useCallback(async () => {
     setLoading(true);
     try {
-      const [transactions, categoryList, goalsList, budgetList, recurringList] = await Promise.all([
-        fetchTransactions(),
-        fetchCategories(),
-        fetchSavingsGoals(),
-        fetchBudgets(),
-        fetchRecurring(),
-      ]);
+      const [transactions, categoryList, goalsList, budgetList, recurringList, accountList] =
+        await Promise.all([
+          fetchTransactions(),
+          fetchCategories(),
+          fetchSavingsGoals(),
+          fetchBudgets(),
+          fetchRecurring(),
+          fetchAccounts(),
+        ]);
 
       setCategories(categoryList);
       setSavingsGoals(goalsList);
@@ -166,6 +189,8 @@ const App: React.FC = () => {
       setBudgetsDisponibles(budgetList.disponible);
       setRecurrentes(recurringList.datos);
       setRecurrentesDisponibles(recurringList.disponible);
+      setCuentas(accountList.datos);
+      setCuentasDisponibles(accountList.disponible);
 
       // Los recurrentes que ya tocan este mes se materializan al abrir la app.
       // Se agregan al estado en vez de recargar: la insercion ya devolvio la
@@ -173,7 +198,11 @@ const App: React.FC = () => {
       let movimientos = transactions;
       if (recurringList.disponible && recurringList.datos.length > 0) {
         try {
-          const generadas = await generarRecurrentesPendientes(recurringList.datos);
+          const cuentaPorDefecto = cuentasActivas(accountList.datos)[0]?.id ?? null;
+          const generadas = await generarRecurrentesPendientes(
+            recurringList.datos,
+            cuentaPorDefecto
+          );
           if (generadas.length > 0) {
             movimientos = [...generadas, ...movimientos];
             setRecurrentes((await fetchRecurring()).datos);
@@ -233,8 +262,26 @@ const App: React.FC = () => {
   }, [data, filters, rango]);
 
   const kpis = useMemo(
-    () => computeKpis(filteredData, previousData, savingsGoals, rango),
-    [filteredData, previousData, savingsGoals, rango]
+    () => computeKpis(filteredData, previousData, savingsGoals),
+    [filteredData, previousData, savingsGoals]
+  );
+
+  /* ── Saldos, agenda y disponible: NO dependen del periodo ── */
+
+  /**
+   * Estos tres bloques usan `data` completo y `today()`, no el rango filtrado.
+   * "Cuanta plata tengo" y "que tengo que pagar" son preguntas sobre el
+   * presente; filtrarlas por "mes pasado" no significaria nada.
+   */
+  const saldos = useMemo(() => saldosPorCuenta(cuentas, data), [cuentas, data]);
+  const total = useMemo(() => saldoTotal(saldos), [saldos]);
+  const sinCuenta = useMemo(() => movimientosSinCuenta(data), [data]);
+
+  const agenda = useMemo(() => construirAgenda(data, recurrentes), [data, recurrentes]);
+
+  const disponible = useMemo(
+    () => disponibleDelMes(data, recurrentes, total),
+    [data, recurrentes, total]
   );
 
   // Proyeccion y presupuestos siempre miran el mes en curso, no el periodo
@@ -248,17 +295,14 @@ const App: React.FC = () => {
 
   const categoryNames = useMemo(() => categories.map(category => category.name), [categories]);
 
+  // Las transferencias se descartan: "Transferencia" no es una categoria que
+  // uno quiera ver en el filtro junto a Mercado y Arriendo.
   const availableCategorias = useMemo(
     () =>
-      Array.from(new Set([...categoryNames, ...data.map(item => item.categoria)])).sort((a, b) =>
-        a.localeCompare(b)
-      ),
+      Array.from(
+        new Set([...categoryNames, ...sinTransferencias(data).map(item => item.categoria)])
+      ).sort((a, b) => a.localeCompare(b)),
     [categoryNames, data]
-  );
-
-  const availableCanales = useMemo(
-    () => Array.from(new Set(data.map(item => item.canal))).sort((a, b) => a.localeCompare(b)),
-    [data]
   );
 
   /* ────────────────────────────── acciones ────────────────────────────── */
@@ -277,16 +321,88 @@ const App: React.FC = () => {
     }
   };
 
-  const handleDeleteTransaction = async (id: string) => {
+  /**
+   * Borrar una sola pata de una transferencia dejaria una cuenta con plata que
+   * salio y la otra sin la que entro. Se borran las dos.
+   */
+  const handleDeleteTransaction = async (tx: Transaction) => {
     const snapshot = data;
-    setData(prev => prev.filter(item => item.id !== id)); // optimista
+    const grupo = tx.transfer_group;
+
+    setData(prev =>
+      prev.filter(item => (grupo ? item.transfer_group !== grupo : item.id !== tx.id))
+    );
+
     try {
-      await deleteTransaction(id);
-      toast.success('Transacción eliminada');
+      if (grupo) {
+        await deleteTransfer(grupo);
+        toast.success('Transferencia eliminada');
+      } else {
+        await deleteTransaction(tx.id);
+        toast.success('Transacción eliminada');
+      }
     } catch (err) {
       setData(snapshot); // revertir
       toast.error(errorMessage(err, 'No se pudo eliminar la transacción'));
     }
+  };
+
+  const handleTransfer = async (input: TransferInput) => {
+    const creadas = await createTransfer(input);
+    setData(prev => [...creadas, ...prev]);
+    toast.success('Transferencia registrada');
+  };
+
+  /** Un toque desde la agenda, sin abrir el formulario. */
+  const handleMarcarPagado = async (id: string) => {
+    const snapshot = data;
+    const movimiento = data.find(item => item.id === id);
+    if (!movimiento) return;
+
+    setData(prev =>
+      prev.map(item => (item.id === id ? { ...item, estado_pago: 'Pagado' as const } : item))
+    );
+
+    try {
+      const actualizado = await updateTransaction(id, { estado_pago: 'Pagado' });
+      setData(prev => prev.map(item => (item.id === id ? actualizado : item)));
+      toast.success(
+        movimiento.tipo === 'Gasto' ? 'Marcado como pagado' : 'Marcado como cobrado'
+      );
+    } catch (err) {
+      setData(snapshot);
+      toast.error(errorMessage(err, 'No se pudo actualizar el movimiento'));
+    }
+  };
+
+  const handleCreateAccount = async (input: {
+    nombre: string;
+    tipo: AccountType;
+    saldoInicial: number;
+  }) => {
+    const creada = await createAccount(input);
+    setCuentas(prev => [...prev, creada].sort((a, b) => a.orden - b.orden));
+  };
+
+  const handleUpdateAccount = async (id: string, changes: Partial<Account>) => {
+    const actualizada = await updateAccount(id, changes);
+    setCuentas(prev => prev.map(item => (item.id === id ? actualizada : item)));
+  };
+
+  const handleDeleteAccount = async (id: string, reassignTo?: string) => {
+    await deleteAccount(id, reassignTo);
+    setCuentas(prev => prev.filter(item => item.id !== id));
+
+    /**
+     * Se refrescan solo los movimientos, no `loadAppData()`. Recargarlo todo
+     * levanta el `loading` de pantalla completa, y al volver el panel de
+     * Configuración se remonta: terminabas de vuelta en el menú de secciones,
+     * lejos de donde estabas. Los recurrentes tambien pudieron reasignarse, asi
+     * que se traen aparte.
+     */
+    const [movimientos, recurringList] = await Promise.all([fetchTransactions(), fetchRecurring()]);
+    setData(movimientos);
+    setRecurrentes(recurringList.datos);
   };
 
   const handleImport = async (rows: Array<Omit<Transaction, 'id' | 'user_id'>>) => {
@@ -373,7 +489,7 @@ const App: React.FC = () => {
       toast.info('Todavía no hay movimientos para exportar');
       return;
     }
-    downloadCsv(data, `mis-finanzas-${toDateString(today())}.csv`);
+    downloadCsv(data, `mis-finanzas-${toDateString(today())}.csv`, cuentas);
     toast.success(`${data.length} movimientos exportados`);
   };
 
@@ -415,13 +531,35 @@ const App: React.FC = () => {
       filters={filters}
       setFilters={setFilters}
       availableCategorias={availableCategorias}
-      availableCanales={availableCanales}
+      accounts={cuentas}
       resultCount={filteredData.length}
     />
   );
 
+  /**
+   * El dashboard va de "ahora" a "historia", en ese orden.
+   *
+   * Arriba, sin filtro de periodo: cuanta plata tienes, cuanto puedes gastar y
+   * que se te viene. Son las tres preguntas que uno se hace al abrir la app y
+   * ninguna depende del rango de fechas.
+   *
+   * Debajo, ya con el selector de periodo: como te fue. Ahi si tiene sentido
+   * mirar "mes pasado" o "ultimos 3 meses".
+   */
   const dashboard = (
     <>
+      {cuentasDisponibles && <SaldoHero saldos={saldos} total={total} sinCuenta={sinCuenta} />}
+
+      <MesEnCurso disponible={disponible} proyeccion={proyeccion} />
+
+      <AgendaPanel agenda={agenda} onMarcarPagado={handleMarcarPagado} />
+
+      <BudgetsPanel estados={presupuestos} />
+
+      <div className="dashboard-divider">
+        <span>Cómo te fue</span>
+      </div>
+
       <PeriodSelector
         value={filters.period}
         onChange={period => setFilters(prev => ({ ...prev, period }))}
@@ -430,8 +568,6 @@ const App: React.FC = () => {
 
       {filtersBar}
 
-      {/* El balance es la respuesta a "¿cómo voy?". Antes competia de igual a
-          igual con otras ocho tarjetas del mismo tamaño. */}
       <div className={`balance-hero ${kpis.beneficioNeto >= 0 ? 'is-positive' : 'is-negative'}`}>
         <span className="balance-hero__label">Balance del periodo</span>
         <strong className="balance-hero__value">{formatCurrency(kpis.beneficioNeto)}</strong>
@@ -445,6 +581,10 @@ const App: React.FC = () => {
         </div>
       </div>
 
+      {/* Antes eran ocho tarjetas mas un desplegable con otras cuatro. Se
+          quedaron las dos que se miran: numero de movimientos, ticket medio y
+          mayor gasto individual no cambiaban ninguna decision, y "mayor
+          categoria" ya sale mejor en la grafica de barras de abajo. */}
       <div className="kpi-grid">
         <KpiCard
           title="Ingresos"
@@ -468,61 +608,7 @@ const App: React.FC = () => {
               : undefined
           }
         />
-        <KpiCard
-          title="Promedio diario"
-          value={formatCurrency(kpis.gastoPromedioDiario)}
-          icon={Activity}
-          color="var(--info)"
-          subtitle="De gasto"
-        />
-        <KpiCard
-          title="Movimientos"
-          value={String(kpis.numOperaciones)}
-          icon={Activity}
-          color="var(--accent-secondary)"
-          subtitle="En el periodo"
-        />
       </div>
-
-      {/* Los KPIs de detalle quedan detras de un toggle: se consultan de vez en
-          cuando y ocupaban media pantalla de celular cada vez. */}
-      <details className="kpi-more">
-        <summary>Ver más métricas</summary>
-        <div className="kpi-grid">
-          <KpiCard
-            title="Ticket medio"
-            value={formatCurrency(kpis.ticketMedioGasto)}
-            icon={Activity}
-            color="var(--info)"
-            subtitle="Promedio por gasto"
-          />
-          <KpiCard
-            title="Mayor categoría"
-            value={kpis.categoriaMasGasto.nombre}
-            icon={Target}
-            color="var(--warning)"
-            subtitle={formatCurrency(kpis.categoriaMasGasto.monto)}
-          />
-          <KpiCard
-            title="Mayor gasto"
-            value={formatCurrency(kpis.mayorGastoIndividual)}
-            icon={TrendingDown}
-            color="var(--danger)"
-            subtitle="Individual"
-          />
-          <KpiCard
-            title="Periodo anterior"
-            value={kpis.tieneComparativo ? formatCurrency(kpis.ahorroPeriodoAnterior) : '—'}
-            icon={DollarSign}
-            color="var(--accent-primary)"
-            subtitle={kpis.tieneComparativo ? 'Balance' : 'Sin datos previos'}
-          />
-        </div>
-      </details>
-
-      <MonthPulse proyeccion={proyeccion} />
-
-      <BudgetsPanel estados={presupuestos} />
 
       <GoalsPanel metas={kpis.metas} />
 
@@ -533,7 +619,7 @@ const App: React.FC = () => {
           </div>
         }
       >
-        <DashboardCharts data={filteredData} allData={data} rango={rango} />
+        <DashboardCharts data={filteredData} allData={data} />
       </Suspense>
     </>
   );
@@ -588,6 +674,7 @@ const App: React.FC = () => {
               {filtersBar}
               <TransactionsTable
                 transactions={filteredData}
+                accounts={cuentas}
                 onEdit={tx => setModalState({ mode: 'edit', tx })}
                 onRepeat={tx => setModalState({ mode: 'repeat', tx })}
                 onDelete={handleDeleteTransaction}
@@ -608,6 +695,12 @@ const App: React.FC = () => {
               budgetsDisponibles={budgetsDisponibles}
               recurrentes={recurrentes}
               recurrentesDisponibles={recurrentesDisponibles}
+              saldos={saldos}
+              cuentas={cuentas}
+              cuentasDisponibles={cuentasDisponibles}
+              onCreateAccount={handleCreateAccount}
+              onUpdateAccount={handleUpdateAccount}
+              onDeleteAccount={handleDeleteAccount}
               onAddCategory={handleAddCategory}
               onDeleteCategory={handleDeleteCategory}
               onAddGoal={handleAddGoal}
@@ -628,8 +721,10 @@ const App: React.FC = () => {
       {modalState !== null && (
         <TransactionModal
           categories={categoryNames}
+          accounts={cuentas}
           onClose={() => setModalState(null)}
           onSave={handleSaveTransaction}
+          onTransfer={handleTransfer}
           editingTransaction={modalState.mode === 'edit' ? modalState.tx : undefined}
           prefill={modalState.mode === 'repeat' ? modalState.tx : undefined}
         />

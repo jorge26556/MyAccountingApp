@@ -1,4 +1,6 @@
 import type { Transaction } from '../types';
+import type { RecurringTransaction } from '../services/extras';
+import { esTransferencia } from './accounts';
 import { addMonths, endOfMonth, startOfMonth, toMonthKey, today } from './dates';
 
 /**
@@ -10,7 +12,14 @@ import { addMonths, endOfMonth, startOfMonth, toMonthKey, today } from './dates'
  * anterior y proyectan el cierre.
  */
 
-const esGastoPagado = (t: Transaction) => t.tipo === 'Gasto' && t.estado_pago === 'Pagado';
+// Una transferencia entre tus propias cuentas no es gasto ni ingreso. Si se
+// colara aqui, mover plata de un bolsillo a otro dispararia las graficas de
+// gasto y te haria creer que estas gastando el doble.
+const esGastoPagado = (t: Transaction) =>
+  t.tipo === 'Gasto' && t.estado_pago === 'Pagado' && !esTransferencia(t);
+
+const esIngresoPagado = (t: Transaction) =>
+  t.tipo === 'Ingreso' && t.estado_pago === 'Pagado' && !esTransferencia(t);
 
 export interface AcumuladoDia {
   dia: number;
@@ -246,4 +255,127 @@ export const transaccionesDelMes = (transactions: Transaction[], referencia: Dat
   const desde = startOfMonth(referencia);
   const hasta = endOfMonth(referencia);
   return transactions.filter(item => item.fecha >= desde && item.fecha <= hasta);
+};
+
+/* ─────────────────── cuanto puedo gastar, y cuanto es fijo ─────────────────── */
+
+export interface DisponibleMes {
+  /** Plata real en todas las cuentas, ahora mismo. */
+  saldoActual: number;
+  /** Gastos pendientes y recurrentes que aun no han caido: ya estan gastados. */
+  comprometido: number;
+  porCobrar: number;
+  /** Tope duro: lo que puedes mover sin quedarte en rojo. */
+  disponible: number;
+
+  ingresosDelMes: number;
+  gastosDelMes: number;
+  /** Lo que entro menos lo que salio y lo que falta por salir, este mes. */
+  flujoDelMes: number;
+  /** Lo que puedes gastar SIN tocar el ahorro. Cero si ya lo estas tocando. */
+  margenDelMes: number;
+  enDeficit: boolean;
+
+  diasRestantes: number;
+  porDia: number;
+
+  /** Lo que cuesta existir cada mes: la suma de los recurrentes de gasto. */
+  costoFijoMensual: number;
+  esMesEnCurso: boolean;
+}
+
+/**
+ * "¿Cuanto puedo gastar?" — la pregunta que uno se hace parado en la caja.
+ *
+ * Hay dos formas de responderla y ninguna sirve sola:
+ *
+ *  - Solo con el flujo del mes (entro menos salio) el numero se va a menos
+ *    varios millones en cuanto tocas el ahorro para un viaje o una compra
+ *    grande, y deja de significar nada.
+ *  - Solo con el saldo, te dice que puedes gastarte hasta el ultimo peso
+ *    ahorrado, que es pesimo consejo.
+ *
+ * Asi que se calculan los dos y se dice la verdad:
+ *
+ *  - `margenDelMes` es lo que puedes gastar sin tocar el ahorro. Es de donde
+ *    sale el "$X por dia".
+ *  - `disponible` es el tope real: saldo + lo que falta por cobrar − lo ya
+ *    comprometido.
+ *  - Si `enDeficit`, la app lo dice explicitamente en vez de ofrecer un
+ *    presupuesto diario que en realidad sale del ahorro.
+ *
+ * Los recurrentes que ya cayeron este mes NO se suman a `comprometido`: ya son
+ * transacciones reales y contarlos otra vez seria cobrarlos dos veces.
+ */
+export const disponibleDelMes = (
+  transactions: Transaction[],
+  recurrentes: RecurringTransaction[],
+  saldoActual: number,
+  referencia: Date = today(),
+  hoy: Date = today()
+): DisponibleMes => {
+  const mes = toMonthKey(referencia);
+  const inicioMes = startOfMonth(referencia);
+  const finMes = endOfMonth(referencia);
+  const diasDelMes = finMes.getDate();
+  const esMesEnCurso = toMonthKey(hoy) === mes;
+
+  const sumar = (items: Transaction[]) =>
+    items.reduce((acc, item) => acc + Math.abs(item.importe), 0);
+
+  const delMes = transactions.filter(item => toMonthKey(item.fecha) === mes);
+
+  const ingresosDelMes = sumar(delMes.filter(esIngresoPagado));
+  const gastosDelMes = sumar(delMes.filter(esGastoPagado));
+
+  // Los pendientes vencidos de meses anteriores siguen siendo plata que debes,
+  // asi que entran igual: por eso el corte es "hasta fin de mes", no "de este
+  // mes". Un recibo de julio sin pagar no deja de existir en agosto.
+  const pendientes = transactions.filter(
+    item => item.estado_pago === 'Pendiente' && item.fecha <= finMes && !esTransferencia(item)
+  );
+
+  const pendientesGasto = sumar(pendientes.filter(item => item.tipo === 'Gasto'));
+  const pendientesIngreso = sumar(pendientes.filter(item => item.tipo === 'Ingreso'));
+
+  const activos = recurrentes.filter(item => item.activo);
+  const sinCaer = activos.filter(
+    item =>
+      esMesEnCurso &&
+      item.dia_del_mes > hoy.getDate() &&
+      (item.ultima_generacion === null || item.ultima_generacion < inicioMes)
+  );
+
+  const sumarRecurrentes = (items: RecurringTransaction[], tipo: 'Ingreso' | 'Gasto') =>
+    items
+      .filter(item => item.tipo === tipo)
+      .reduce((acc, item) => acc + Math.abs(item.importe), 0);
+
+  const comprometido = pendientesGasto + sumarRecurrentes(sinCaer, 'Gasto');
+  const porCobrar = pendientesIngreso + sumarRecurrentes(sinCaer, 'Ingreso');
+
+  const disponible = saldoActual + porCobrar - comprometido;
+  const flujoDelMes = ingresosDelMes + porCobrar - gastosDelMes - comprometido;
+
+  // El margen nunca supera el disponible: de nada sirve decirte que te sobran
+  // $500.000 del mes si en la cuenta solo hay $200.000.
+  const margenDelMes = Math.max(0, Math.min(flujoDelMes, disponible));
+
+  const diasRestantes = esMesEnCurso ? Math.max(1, diasDelMes - hoy.getDate() + 1) : diasDelMes;
+
+  return {
+    saldoActual,
+    comprometido,
+    porCobrar,
+    disponible,
+    ingresosDelMes,
+    gastosDelMes,
+    flujoDelMes,
+    margenDelMes,
+    enDeficit: flujoDelMes < 0,
+    diasRestantes,
+    porDia: margenDelMes / diasRestantes,
+    costoFijoMensual: sumarRecurrentes(activos, 'Gasto'),
+    esMesEnCurso,
+  };
 };

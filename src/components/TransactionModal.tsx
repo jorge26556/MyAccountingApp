@@ -1,25 +1,38 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MinusCircle, PlusCircle, Save, X } from 'lucide-react';
-import type { PaymentStatus, Transaction, TransactionType } from '../types';
+import { ArrowLeftRight, MinusCircle, PlusCircle, Save, X } from 'lucide-react';
+import type { Account, PaymentStatus, Transaction, TransactionType } from '../types';
 import { toDateString, today } from '../lib/dates';
+import { cuentasActivas } from '../lib/accounts';
 import { formatCurrency } from '../lib/format';
 import { errorMessage, useToast } from '../lib/toast';
 
+export interface TransferInput {
+  origen: string;
+  destino: string;
+  importe: number;
+  fecha: Date;
+  descripcion: string;
+}
+
 interface TransactionModalProps {
   categories: string[];
+  accounts: Account[];
   onClose: () => void;
   onSave: (transaction: Omit<Transaction, 'id' | 'user_id'>) => Promise<void>;
+  onTransfer: (input: TransferInput) => Promise<void>;
   editingTransaction?: Transaction;
   /** Movimiento del cual copiar los datos al crear uno nuevo ("repetir"). */
   prefill?: Transaction;
 }
 
-const CANALES = ['Directo', 'Transferencia', 'Tarjeta', 'Efectivo', 'Nequi', 'Daviplata', 'Otro'];
+type Modo = TransactionType | 'Transferencia';
 
 const TransactionModal: React.FC<TransactionModalProps> = ({
   categories,
+  accounts,
   onClose,
   onSave,
+  onTransfer,
   editingTransaction,
   prefill,
 }) => {
@@ -33,6 +46,8 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
   // no volver a registrarlo con la fecha vieja).
   const base = editingTransaction ?? prefill;
 
+  const disponibles = useMemo(() => cuentasActivas(accounts), [accounts]);
+
   const selectableCategories = useMemo(() => {
     const current = base?.categoria?.trim();
     const merged = current && !categories.includes(current) ? [current, ...categories] : categories;
@@ -41,14 +56,15 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [guardadas, setGuardadas] = useState(0);
+  const [modo, setModo] = useState<Modo>((base?.tipo ?? 'Gasto') as Modo);
   const [formData, setFormData] = useState({
     fecha: toDateString(editingTransaction?.fecha ?? today()),
-    tipo: (base?.tipo ?? 'Gasto') as TransactionType,
     categoria: base?.categoria ?? selectableCategories[0] ?? '',
     importe: base ? String(Math.abs(base.importe)) : '',
     estado_pago: (base?.estado_pago ?? 'Pagado') as PaymentStatus,
     descripcion: base?.descripcion ?? '',
-    canal: base?.canal ?? 'Directo',
+    account_id: base?.account_id ?? disponibles[0]?.id ?? '',
+    destino: disponibles[1]?.id ?? '',
   });
 
   const set = (key: keyof typeof formData, value: string) =>
@@ -63,21 +79,45 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose, loading]);
 
+  const esTransferencia = modo === 'Transferencia';
   const importeNumerico = Number(formData.importe);
   const importeValido = Number.isFinite(importeNumerico) && importeNumerico > 0;
-  const noCategoriesAvailable = selectableCategories.length === 0;
-  const puedeGuardar = importeValido && !noCategoriesAvailable && !loading;
+  const sinCategorias = selectableCategories.length === 0;
+  const sinCuentas = disponibles.length === 0;
+  const cuentasDistintas = formData.account_id !== formData.destino;
+
+  const puedeGuardar =
+    importeValido &&
+    !loading &&
+    !sinCuentas &&
+    (esTransferencia
+      ? disponibles.length >= 2 && Boolean(formData.destino) && cuentasDistintas
+      : !sinCategorias);
 
   const guardar = async () => {
     const [year, month, day] = formData.fecha.split('-').map(Number);
+    const fecha = new Date(year, month - 1, day);
+
+    if (esTransferencia) {
+      await onTransfer({
+        origen: formData.account_id,
+        destino: formData.destino,
+        importe: Math.abs(importeNumerico),
+        fecha,
+        descripcion: formData.descripcion.trim(),
+      });
+      return;
+    }
+
     await onSave({
-      fecha: new Date(year, month - 1, day),
-      tipo: formData.tipo,
+      fecha,
+      tipo: modo,
       categoria: formData.categoria,
       importe: Math.abs(importeNumerico),
       estado_pago: formData.estado_pago,
       descripcion: formData.descripcion.trim(),
-      canal: formData.canal,
+      account_id: formData.account_id || null,
+      transfer_group: null,
     });
   };
 
@@ -98,8 +138,8 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
 
   /**
    * Registrar varios gastos de una misma salida (mercado, gasolina, café)
-   * obligaba a reabrir el modal y volver a elegir fecha y canal cada vez.
-   * Esto conserva fecha, tipo, canal y estado —lo que casi siempre se repite—
+   * obligaba a reabrir el modal y volver a elegir fecha y cuenta cada vez.
+   * Esto conserva fecha, tipo, cuenta y estado —lo que casi siempre se repite—
    * y limpia importe, categoría y descripción.
    */
   const handleSaveAndNew = async () => {
@@ -118,7 +158,19 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
     }
   };
 
-  const isIngreso = formData.tipo === 'Ingreso';
+  const titulo = isEditMode
+    ? 'Editar movimiento'
+    : esTransferencia
+      ? 'Nueva transferencia'
+      : prefill
+        ? 'Repetir movimiento'
+        : 'Nuevo movimiento';
+
+  const modos: Array<{ id: Modo; label: string; color: string; icon: React.ElementType }> = [
+    { id: 'Ingreso', label: 'Ingreso', color: 'var(--success)', icon: PlusCircle },
+    { id: 'Gasto', label: 'Gasto', color: 'var(--danger)', icon: MinusCircle },
+    { id: 'Transferencia', label: 'Entre cuentas', color: 'var(--accent-primary)', icon: ArrowLeftRight },
+  ];
 
   return (
     <div
@@ -127,17 +179,12 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
         if (event.target === event.currentTarget && !loading) onClose();
       }}
     >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={isEditMode ? 'Editar transaccion' : 'Anadir transaccion'} style={cardStyle}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={titulo} style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ color: 'var(--text-primary)', fontSize: '1.15rem', fontWeight: 700, margin: 0 }}>
-              {isEditMode ? 'Editar movimiento' : prefill ? 'Repetir movimiento' : 'Nuevo movimiento'}
+              {titulo}
             </h3>
-            {isEditMode && (
-              <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                ID {editingTransaction?.id.slice(0, 8)}…
-              </p>
-            )}
             {guardadas > 0 && (
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', color: 'var(--success)' }}>
                 {guardadas} {guardadas === 1 ? 'movimiento guardado' : 'movimientos guardados'} en esta sesión
@@ -150,41 +197,32 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-            {(['Ingreso', 'Gasto'] as TransactionType[]).map(tipo => {
-              const active = formData.tipo === tipo;
-              const color = tipo === 'Ingreso' ? 'var(--success)' : 'var(--danger)';
-              return (
-                <button
-                  key={tipo}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => set('tipo', tipo)}
-                  style={{
-                    padding: '0.7rem',
-                    borderRadius: '8px',
-                    border: `1.5px solid ${active ? color : 'var(--border-color)'}`,
-                    backgroundColor: active
-                      ? tipo === 'Ingreso'
-                        ? 'rgba(63,185,80,0.12)'
-                        : 'rgba(248,81,73,0.12)'
-                      : 'transparent',
-                    color: active ? color : 'var(--text-secondary)',
-                    fontWeight: 600,
-                    fontSize: '0.9rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.45rem',
-                  }}
-                >
-                  {tipo === 'Ingreso' ? <PlusCircle size={16} /> : <MinusCircle size={16} />}
-                  {tipo}
-                </button>
-              );
-            })}
-          </div>
+          {/* Las transferencias no se editan desde aqui: son dos filas
+              enlazadas y cambiar una sola descuadraria un saldo. */}
+          {!isEditMode && (
+            <div className="modal-modes">
+              {modos.map(({ id, label, color, icon: Icon }) => {
+                const active = modo === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setModo(id)}
+                    className="modal-mode"
+                    style={{
+                      borderColor: active ? color : 'var(--border-color)',
+                      backgroundColor: active ? `color-mix(in srgb, ${color} 12%, transparent)` : 'transparent',
+                      color: active ? color : 'var(--text-secondary)',
+                    }}
+                  >
+                    <Icon size={16} />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <div style={fieldStyle}>
             <label style={labelStyle} htmlFor="tx-fecha">Fecha</label>
@@ -198,41 +236,97 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-            <div style={fieldStyle}>
-              <label style={labelStyle} htmlFor="tx-categoria">Categoría</label>
-              <select
-                id="tx-categoria"
-                value={formData.categoria}
-                onChange={event => set('categoria', event.target.value)}
-                required
-                disabled={noCategoriesAvailable}
-                style={{ ...inputStyle, opacity: noCategoriesAvailable ? 0.65 : 1 }}
-              >
-                {noCategoriesAvailable ? (
-                  <option value="">Sin categorías disponibles</option>
-                ) : (
-                  selectableCategories.map(category => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))
+          {esTransferencia ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <div style={fieldStyle}>
+                <label style={labelStyle} htmlFor="tx-origen">Desde</label>
+                <select
+                  id="tx-origen"
+                  value={formData.account_id}
+                  onChange={event => set('account_id', event.target.value)}
+                  style={inputStyle}
+                >
+                  {disponibles.map(cuenta => (
+                    <option key={cuenta.id} value={cuenta.id}>{cuenta.nombre}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={fieldStyle}>
+                <label style={labelStyle} htmlFor="tx-destino">Hacia</label>
+                <select
+                  id="tx-destino"
+                  value={formData.destino}
+                  onChange={event => set('destino', event.target.value)}
+                  style={inputStyle}
+                >
+                  {disponibles.map(cuenta => (
+                    <option key={cuenta.id} value={cuenta.id}>{cuenta.nombre}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div style={fieldStyle}>
+                  <label style={labelStyle} htmlFor="tx-categoria">Categoría</label>
+                  <select
+                    id="tx-categoria"
+                    value={formData.categoria}
+                    onChange={event => set('categoria', event.target.value)}
+                    required
+                    disabled={sinCategorias}
+                    style={{ ...inputStyle, opacity: sinCategorias ? 0.65 : 1 }}
+                  >
+                    {sinCategorias ? (
+                      <option value="">Sin categorías disponibles</option>
+                    ) : (
+                      selectableCategories.map(category => (
+                        <option key={category} value={category}>{category}</option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div style={fieldStyle}>
+                  <label style={labelStyle} htmlFor="tx-estado">Estado</label>
+                  <select
+                    id="tx-estado"
+                    value={formData.estado_pago}
+                    onChange={event => set('estado_pago', event.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="Pagado">Pagado</option>
+                    <option value="Pendiente">Pendiente</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={fieldStyle}>
+                <label style={labelStyle} htmlFor="tx-cuenta">Cuenta</label>
+                <select
+                  id="tx-cuenta"
+                  value={formData.account_id}
+                  onChange={event => set('account_id', event.target.value)}
+                  disabled={sinCuentas}
+                  style={{ ...inputStyle, opacity: sinCuentas ? 0.65 : 1 }}
+                >
+                  {sinCuentas ? (
+                    <option value="">Sin cuentas disponibles</option>
+                  ) : (
+                    disponibles.map(cuenta => (
+                      <option key={cuenta.id} value={cuenta.id}>{cuenta.nombre}</option>
+                    ))
+                  )}
+                </select>
+                {formData.estado_pago === 'Pendiente' && (
+                  <span style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Un pendiente no mueve el saldo todavía. Aparecerá en Próximos pagos con la
+                    fecha que le pongas.
+                  </span>
                 )}
-              </select>
-            </div>
-            <div style={fieldStyle}>
-              <label style={labelStyle} htmlFor="tx-estado">Estado</label>
-              <select
-                id="tx-estado"
-                value={formData.estado_pago}
-                onChange={event => set('estado_pago', event.target.value)}
-                style={inputStyle}
-              >
-                <option value="Pagado">Pagado</option>
-                <option value="Pendiente">Pendiente</option>
-              </select>
-            </div>
-          </div>
+              </div>
+            </>
+          )}
 
           <div style={fieldStyle}>
             <label style={labelStyle} htmlFor="tx-importe">Importe (COP)</label>
@@ -256,38 +350,39 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
             </span>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '0.75rem' }}>
-            <div style={fieldStyle}>
-              <label style={labelStyle} htmlFor="tx-canal">Canal</label>
-              <select
-                id="tx-canal"
-                value={formData.canal}
-                onChange={event => set('canal', event.target.value)}
-                style={inputStyle}
-              >
-                {CANALES.map(channel => (
-                  <option key={channel} value={channel}>
-                    {channel}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div style={fieldStyle}>
-              <label style={labelStyle} htmlFor="tx-descripcion">Descripción</label>
-              <input
-                id="tx-descripcion"
-                type="text"
-                placeholder="Notas adicionales..."
-                value={formData.descripcion}
-                onChange={event => set('descripcion', event.target.value)}
-                style={inputStyle}
-              />
-            </div>
+          <div style={fieldStyle}>
+            <label style={labelStyle} htmlFor="tx-descripcion">Descripción</label>
+            <input
+              id="tx-descripcion"
+              type="text"
+              placeholder="Notas adicionales..."
+              value={formData.descripcion}
+              onChange={event => set('descripcion', event.target.value)}
+              style={inputStyle}
+            />
           </div>
 
-          {noCategoriesAvailable && (
+          {sinCuentas && (
+            <p style={{ color: 'var(--danger)', fontSize: '0.85rem', marginTop: '-0.25rem' }}>
+              Crea al menos una cuenta en Configuración → Cuentas para poder registrar movimientos.
+            </p>
+          )}
+
+          {!esTransferencia && sinCategorias && (
             <p style={{ color: 'var(--danger)', fontSize: '0.85rem', marginTop: '-0.25rem' }}>
               Agrega al menos una categoría en Configuración para poder guardar transacciones.
+            </p>
+          )}
+
+          {esTransferencia && disponibles.length < 2 && (
+            <p style={{ color: 'var(--danger)', fontSize: '0.85rem', marginTop: '-0.25rem' }}>
+              Para transferir necesitas al menos dos cuentas.
+            </p>
+          )}
+
+          {esTransferencia && disponibles.length >= 2 && !cuentasDistintas && (
+            <p style={{ color: 'var(--danger)', fontSize: '0.85rem', marginTop: '-0.25rem' }}>
+              El origen y el destino deben ser cuentas distintas.
             </p>
           )}
 
@@ -300,9 +395,11 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
               padding: '0.9rem',
               borderRadius: '8px',
               border: 'none',
-              background: isIngreso
-                ? 'linear-gradient(90deg, #3fb950, #388bfd)'
-                : 'linear-gradient(90deg, #f85149, #f97316)',
+              background: esTransferencia
+                ? 'linear-gradient(90deg, #58a6ff, #bc8cff)'
+                : modo === 'Ingreso'
+                  ? 'linear-gradient(90deg, #3fb950, #388bfd)'
+                  : 'linear-gradient(90deg, #f85149, #f97316)',
               color: '#fff',
               fontSize: '0.95rem',
               fontWeight: 700,
@@ -318,7 +415,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
             {loading ? 'Guardando...' : isEditMode ? 'Guardar cambios' : 'Guardar y cerrar'}
           </button>
 
-          {!isEditMode && (
+          {!isEditMode && !esTransferencia && (
             <button
               type="button"
               onClick={handleSaveAndNew}

@@ -13,7 +13,8 @@ const tx = (over: Partial<Transaction> = {}): Transaction => ({
   importe: 10000,
   estado_pago: 'Pagado',
   descripcion: '',
-  canal: 'Nequi',
+  account_id: 'cuenta-1',
+  transfer_group: null,
   ...over,
 });
 
@@ -57,107 +58,64 @@ describe('computeKpis · totales', () => {
     expect(kpis.ingresosPendientes).toBe(250_000);
   });
 
-  it('cuenta todas las operaciones, pagadas o no', () => {
-    const kpis = computeKpis([tx(), tx({ estado_pago: 'Pendiente' })], [], []);
-    expect(kpis.numOperaciones).toBe(2);
-  });
-
   it('normaliza importes negativos que pudieran venir de datos viejos', () => {
     const kpis = computeKpis([tx({ tipo: 'Gasto', importe: -50_000 })], [], []);
     expect(kpis.totalGastos).toBe(50_000);
   });
 
-  it('devuelve ceros y N/A con dataset vacio, sin NaN', () => {
+  it('devuelve ceros con dataset vacio, sin NaN', () => {
     const kpis = computeKpis([], [], []);
 
     expect(kpis.totalIngresos).toBe(0);
     expect(kpis.beneficioNeto).toBe(0);
-    expect(kpis.ticketMedioGasto).toBe(0);
-    expect(kpis.gastoPromedioDiario).toBe(0);
-    expect(kpis.categoriaMasGasto.nombre).toBe('N/A');
     expect(Number.isNaN(kpis.variacionAhorro)).toBe(false);
   });
 });
 
-describe('computeKpis · categorias', () => {
-  it('identifica la categoria de mayor gasto', () => {
+describe('computeKpis · transferencias entre cuentas propias', () => {
+  const transferencia = (over: Partial<Transaction> = {}) =>
+    tx({ transfer_group: 'grupo-1', categoria: 'Transferencia', ...over });
+
+  it('no cuenta una transferencia ni como ingreso ni como gasto', () => {
+    // El bug clasico: pasar $500.000 de una cuenta a otra se guardaba como un
+    // gasto Y un ingreso normales. El balance seguia cuadrando —por eso nadie
+    // lo notaba— pero ingresos y gastos del mes salian inflados en $500.000.
     const kpis = computeKpis(
       [
-        tx({ categoria: 'Mercado', importe: 100_000 }),
-        tx({ categoria: 'Arriendo', importe: 900_000 }),
-        tx({ categoria: 'Mercado', importe: 150_000 }),
-      ],
-      [],
-      []
-    );
-
-    expect(kpis.categoriaMasGasto).toEqual({ nombre: 'Arriendo', monto: 900_000 });
-  });
-
-  it('no mezcla ingresos con gastos al rankear', () => {
-    const kpis = computeKpis(
-      [
-        tx({ tipo: 'Ingreso', categoria: 'Salario', importe: 5_000_000 }),
-        tx({ tipo: 'Gasto', categoria: 'Mercado', importe: 100_000 }),
-      ],
-      [],
-      []
-    );
-
-    expect(kpis.categoriaMasGasto.nombre).toBe('Mercado');
-    expect(kpis.categoriaMasRentable.nombre).toBe('Salario');
-  });
-
-  it('ignora los pendientes en el ranking', () => {
-    const kpis = computeKpis(
-      [
-        tx({ categoria: 'Mercado', importe: 100_000 }),
-        tx({ categoria: 'Viajes', importe: 900_000, estado_pago: 'Pendiente' }),
-      ],
-      [],
-      []
-    );
-
-    expect(kpis.categoriaMasGasto.nombre).toBe('Mercado');
-  });
-});
-
-describe('computeKpis · promedios', () => {
-  it('ticket medio divide entre el numero de gastos, no de transacciones', () => {
-    const kpis = computeKpis(
-      [
-        tx({ tipo: 'Ingreso', importe: 5_000_000 }),
-        tx({ tipo: 'Gasto', importe: 100_000 }),
+        tx({ tipo: 'Ingreso', importe: 1_000_000 }),
         tx({ tipo: 'Gasto', importe: 300_000 }),
+        transferencia({ tipo: 'Gasto', importe: 500_000 }),
+        transferencia({ tipo: 'Ingreso', importe: 500_000 }),
       ],
       [],
       []
     );
 
-    expect(kpis.ticketMedioGasto).toBe(200_000);
+    expect(kpis.totalIngresos).toBe(1_000_000);
+    expect(kpis.totalGastos).toBe(300_000);
+    expect(kpis.beneficioNeto).toBe(700_000);
   });
 
-  it('promedio diario usa los dias del rango cuando hay periodo', () => {
-    const desde = new Date(2026, 7, 1);
-    const hasta = new Date(2026, 7, 31);
-    const kpis = computeKpis(
-      [tx({ importe: 310_000, fecha: new Date(2026, 7, 5) })],
-      [],
-      [],
-      { desde, hasta }
-    );
+  it('tampoco las cuenta en el periodo anterior', () => {
+    const anteriores = [
+      tx({ tipo: 'Ingreso', importe: 1_000_000 }),
+      tx({ tipo: 'Gasto', importe: 400_000 }),
+      transferencia({ tipo: 'Gasto', importe: 900_000 }),
+      transferencia({ tipo: 'Ingreso', importe: 900_000 }),
+    ];
 
-    expect(kpis.gastoPromedioDiario).toBeCloseTo(10_000);
+    const kpis = computeKpis([tx({ tipo: 'Ingreso', importe: 600_000 })], anteriores, []);
+    expect(kpis.ahorroPeriodoAnterior).toBe(600_000);
   });
 
-  it('mayor gasto individual toma el maximo, no la suma', () => {
+  it('una transferencia pendiente tampoco entra en los pendientes', () => {
     const kpis = computeKpis(
-      [tx({ importe: 100_000 }), tx({ importe: 750_000 }), tx({ importe: 20_000 })],
+      [transferencia({ tipo: 'Gasto', importe: 500_000, estado_pago: 'Pendiente' })],
       [],
       []
     );
 
-    expect(kpis.mayorGastoIndividual).toBe(750_000);
+    expect(kpis.gastosPendientes).toBe(0);
   });
 });
 
@@ -302,15 +260,15 @@ describe('applyFilters', () => {
     dateTo: null,
     tipo: 'Todos',
     categorias: [],
-    canales: [],
+    cuentas: [],
     estadoPago: 'Todos',
     activeSearch: '',
   };
 
   const datos = [
-    tx({ categoria: 'Mercado', canal: 'Nequi', tipo: 'Gasto', descripcion: 'Frutas' }),
-    tx({ categoria: 'Arriendo', canal: 'Transferencia', tipo: 'Gasto', descripcion: 'Agosto' }),
-    tx({ categoria: 'Salario', canal: 'Transferencia', tipo: 'Ingreso', descripcion: 'Quincena' }),
+    tx({ categoria: 'Mercado', account_id: 'nequi', tipo: 'Gasto', descripcion: 'Frutas' }),
+    tx({ categoria: 'Arriendo', account_id: 'banco', tipo: 'Gasto', descripcion: 'Agosto' }),
+    tx({ categoria: 'Salario', account_id: 'banco', tipo: 'Ingreso', descripcion: 'Quincena' }),
   ];
 
   it('sin filtros devuelve todo', () => {
@@ -321,14 +279,25 @@ describe('applyFilters', () => {
     expect(applyFilters(datos, { ...base, tipo: 'Ingreso' }, SIN_RANGO)).toHaveLength(1);
   });
 
-  it('combina categoria y canal como AND', () => {
+  it('filtra por cuenta', () => {
+    expect(applyFilters(datos, { ...base, cuentas: ['nequi'] }, SIN_RANGO)).toHaveLength(1);
+  });
+
+  it('combina categoria y cuenta como AND', () => {
     const resultado = applyFilters(
       datos,
-      { ...base, categorias: ['Arriendo'], canales: ['Transferencia'] },
+      { ...base, categorias: ['Arriendo'], cuentas: ['banco'] },
       SIN_RANGO
     );
     expect(resultado).toHaveLength(1);
     expect(resultado[0].categoria).toBe('Arriendo');
+  });
+
+  it('un movimiento sin cuenta no cuela en el filtro de cuentas', () => {
+    // Antes `item.canal` siempre tenia valor. `account_id` puede ser null si se
+    // borro la cuenta, y `null` no debe coincidir con ninguna seleccion.
+    const huerfano = [tx({ account_id: null })];
+    expect(applyFilters(huerfano, { ...base, cuentas: ['banco'] }, SIN_RANGO)).toHaveLength(0);
   });
 
   it('la busqueda tambien mira la categoria, no solo la descripcion', () => {

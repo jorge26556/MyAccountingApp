@@ -13,7 +13,7 @@ export const EMPTY_FILTERS: DashboardFilters = {
   dateTo: null,
   tipo: 'Todos',
   categorias: [],
-  canales: [],
+  cuentas: [],
   estadoPago: 'Todos',
   activeSearch: '',
 };

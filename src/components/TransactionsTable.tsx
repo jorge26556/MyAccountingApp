@@ -1,24 +1,27 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, ChevronsUpDown, Copy, Pencil, Trash2 } from 'lucide-react';
-import type { Transaction } from '../types';
+import { ArrowLeftRight, ChevronLeft, ChevronRight, ChevronsUpDown, Copy, Pencil, Trash2 } from 'lucide-react';
+import type { Account, Transaction } from '../types';
+import { esTransferencia } from '../lib/accounts';
 import { formatCurrency } from '../lib/format';
 import { useIsMobile } from '../lib/useMediaQuery';
 
 interface TransactionsTableProps {
   transactions: Transaction[];
+  accounts: Account[];
   onEdit: (transaction: Transaction) => void;
-  onDelete: (id: string) => void;
+  onDelete: (transaction: Transaction) => void;
   onRepeat: (transaction: Transaction) => void;
 }
 
-type SortKey = 'fecha' | 'importe' | 'categoria' | 'canal';
+type SortKey = 'fecha' | 'importe' | 'categoria' | 'cuenta';
 
 const ITEMS_PER_PAGE = 15;
 
 const TransactionsTable: React.FC<TransactionsTableProps> = ({
   transactions,
+  accounts,
   onEdit,
   onDelete,
   onRepeat,
@@ -31,6 +34,16 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
     direction: 'desc',
   });
 
+  const nombrePorId = useMemo(
+    () => new Map(accounts.map(cuenta => [cuenta.id, cuenta.nombre])),
+    [accounts]
+  );
+
+  const nombreCuenta = useCallback(
+    (item: Transaction) => (item.account_id && nombrePorId.get(item.account_id)) || '—',
+    [nombrePorId]
+  );
+
   const sortedTransactions = useMemo(() => {
     const items = [...transactions];
     const { key, direction } = sortConfig;
@@ -39,11 +52,12 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
     items.sort((a, b) => {
       if (key === 'fecha') return (a.fecha.getTime() - b.fecha.getTime()) * factor;
       if (key === 'importe') return (Math.abs(a.importe) - Math.abs(b.importe)) * factor;
-      return a[key].localeCompare(b[key]) * factor;
+      if (key === 'cuenta') return nombreCuenta(a).localeCompare(nombreCuenta(b)) * factor;
+      return a.categoria.localeCompare(b.categoria) * factor;
     });
 
     return items;
-  }, [transactions, sortConfig]);
+  }, [transactions, sortConfig, nombreCuenta]);
 
   const totalPages = Math.max(1, Math.ceil(sortedTransactions.length / ITEMS_PER_PAGE));
 
@@ -81,14 +95,20 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
 
   const confirmacionBorrado = (item: Transaction) => (
     <div className="tx-confirm">
-      <span>¿Eliminar {formatCurrency(Math.abs(item.importe))} de {item.categoria}? No se puede deshacer.</span>
+      <span>
+        ¿Eliminar {formatCurrency(Math.abs(item.importe))} de {item.categoria}?
+        {/* Borrar una sola pata dejaria una cuenta con plata que salio y la
+            otra sin la que entro: los dos saldos quedarian mal. */}
+        {esTransferencia(item) && ' Se eliminan las dos patas de la transferencia.'} No se puede
+        deshacer.
+      </span>
       <div className="tx-confirm__actions">
         <button
           type="button"
           className="tx-confirm__yes"
           onClick={() => {
             setDeletingId(null);
-            onDelete(item.id);
+            onDelete(item);
           }}
         >
           Sí, eliminar
@@ -136,15 +156,21 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
         {currentData.map(item => {
           const esGasto = item.tipo === 'Gasto';
           const enBorrado = activeDeleteId === item.id;
+          const transferencia = esTransferencia(item);
 
           return (
             <article key={item.id} className={`card tx-card ${enBorrado ? 'is-deleting' : ''}`}>
               <div className="tx-card__top">
                 <div className="tx-card__main">
-                  <strong className="tx-card__categoria">{item.categoria}</strong>
+                  <strong className="tx-card__categoria">
+                    {transferencia && <ArrowLeftRight size={14} />}
+                    {item.categoria}
+                  </strong>
                   {item.descripcion && <p className="tx-card__desc">{item.descripcion}</p>}
                 </div>
-                <span className={`tx-card__importe ${esGasto ? 'is-gasto' : 'is-ingreso'}`}>
+                <span
+                  className={`tx-card__importe ${transferencia ? 'is-transfer' : esGasto ? 'is-gasto' : 'is-ingreso'}`}
+                >
                   {esGasto ? '−' : '+'}
                   {formatCurrency(Math.abs(item.importe))}
                 </span>
@@ -153,7 +179,7 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
               <div className="tx-card__meta">
                 <span>{format(item.fecha, 'dd MMM yyyy', { locale: es })}</span>
                 <span>·</span>
-                <span>{item.canal}</span>
+                <span>{nombreCuenta(item)}</span>
                 {item.estado_pago === 'Pendiente' && <span className="badge badge-pending">Pendiente</span>}
               </div>
 
@@ -161,12 +187,17 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                 confirmacionBorrado(item)
               ) : (
                 <div className="tx-card__actions">
-                  <button type="button" onClick={() => onRepeat(item)}>
-                    <Copy size={15} /> Repetir
-                  </button>
-                  <button type="button" onClick={() => onEdit(item)}>
-                    <Pencil size={15} /> Editar
-                  </button>
+                  {/* Editar o repetir una sola pata descuadraria el par. */}
+                  {!transferencia && (
+                    <>
+                      <button type="button" onClick={() => onRepeat(item)}>
+                        <Copy size={15} /> Repetir
+                      </button>
+                      <button type="button" onClick={() => onEdit(item)}>
+                        <Pencil size={15} /> Editar
+                      </button>
+                    </>
+                  )}
                   <button type="button" className="is-danger" onClick={() => setDeletingId(item.id)}>
                     <Trash2 size={15} /> Eliminar
                   </button>
@@ -196,8 +227,8 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
               <th onClick={() => requestSort('categoria')} scope="col">
                 Categoría <ChevronsUpDown size={12} /> {sortIndicator('categoria')}
               </th>
-              <th onClick={() => requestSort('canal')} scope="col">
-                Canal <ChevronsUpDown size={12} /> {sortIndicator('canal')}
+              <th onClick={() => requestSort('cuenta')} scope="col">
+                Cuenta <ChevronsUpDown size={12} /> {sortIndicator('cuenta')}
               </th>
               <th onClick={() => requestSort('importe')} scope="col" style={{ textAlign: 'right' }}>
                 Importe <ChevronsUpDown size={12} /> {sortIndicator('importe')}
@@ -211,17 +242,27 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
             {currentData.map(item => {
               const esGasto = item.tipo === 'Gasto';
               const enBorrado = activeDeleteId === item.id;
+              const transferencia = esTransferencia(item);
 
               return (
                 <React.Fragment key={item.id}>
                   <tr className={enBorrado ? 'is-deleting' : ''}>
                     <td>{format(item.fecha, 'dd MMM yyyy', { locale: es })}</td>
                     <td>
-                      <span className={esGasto ? 'badge-expense' : 'badge-income'}>{item.tipo}</span>
+                      {transferencia ? (
+                        <span className="badge-transfer">
+                          <ArrowLeftRight size={12} />
+                          {esGasto ? 'Salida' : 'Entrada'}
+                        </span>
+                      ) : (
+                        <span className={esGasto ? 'badge-expense' : 'badge-income'}>{item.tipo}</span>
+                      )}
                     </td>
                     <td>{item.categoria}</td>
-                    <td>{item.canal}</td>
-                    <td className={`tx-table__importe ${esGasto ? 'is-gasto' : 'is-ingreso'}`}>
+                    <td>{nombreCuenta(item)}</td>
+                    <td
+                      className={`tx-table__importe ${transferencia ? 'is-transfer' : esGasto ? 'is-gasto' : 'is-ingreso'}`}
+                    >
                       {esGasto ? '−' : '+'}
                       {formatCurrency(Math.abs(item.importe))}
                     </td>
@@ -235,25 +276,29 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                     </td>
                     <td>
                       <div className="tx-table__actions">
-                        <button
-                          type="button"
-                          title="Repetir"
-                          aria-label={`Repetir movimiento de ${item.categoria}`}
-                          onClick={() => onRepeat(item)}
-                        >
-                          <Copy size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          title="Editar"
-                          aria-label={`Editar movimiento de ${item.categoria}`}
-                          onClick={() => {
-                            setDeletingId(null);
-                            onEdit(item);
-                          }}
-                        >
-                          <Pencil size={14} />
-                        </button>
+                        {!transferencia && (
+                          <>
+                            <button
+                              type="button"
+                              title="Repetir"
+                              aria-label={`Repetir movimiento de ${item.categoria}`}
+                              onClick={() => onRepeat(item)}
+                            >
+                              <Copy size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Editar"
+                              aria-label={`Editar movimiento de ${item.categoria}`}
+                              onClick={() => {
+                                setDeletingId(null);
+                                onEdit(item);
+                              }}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           className="is-danger"

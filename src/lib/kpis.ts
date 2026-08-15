@@ -1,5 +1,4 @@
 import type {
-  CategoryTotal,
   DashboardFilters,
   GoalProgress,
   KpiData,
@@ -7,6 +6,7 @@ import type {
   SavingsGoal,
   Transaction,
 } from '../types';
+import { esTransferencia } from './accounts';
 import { addMonths, endOfMonth, startOfMonth, today } from './dates';
 
 /**
@@ -85,26 +85,6 @@ export const previousPeriod = (
   return { desde: desdeAnterior, hasta: hastaAnterior };
 };
 
-const mayorPorCategoria = (
-  items: Transaction[],
-  tipo: 'Ingreso' | 'Gasto'
-): CategoryTotal => {
-  const totales = new Map<string, number>();
-
-  items
-    .filter(item => item.tipo === tipo)
-    .forEach(item => {
-      totales.set(item.categoria, (totales.get(item.categoria) ?? 0) + Math.abs(item.importe));
-    });
-
-  let mayor: CategoryTotal = { nombre: 'N/A', monto: 0 };
-  totales.forEach((monto, nombre) => {
-    if (monto > mayor.monto) mayor = { nombre, monto };
-  });
-
-  return mayor;
-};
-
 const progresoMetas = (goals: SavingsGoal[], ahorro: number): GoalProgress[] =>
   goals.map(goal => {
     const porcentaje = goal.amount > 0 ? (ahorro / goal.amount) * 100 : 0;
@@ -117,50 +97,30 @@ const progresoMetas = (goals: SavingsGoal[], ahorro: number): GoalProgress[] =>
     };
   });
 
-/** Dias cubiertos por el rango, o el span real de los datos si no hay rango. */
-const diasDelPeriodo = (
-  items: Transaction[],
-  desde: Date | null,
-  hasta: Date | null
-): number => {
-  const MS_POR_DIA = 86_400_000;
-
-  if (desde && hasta) {
-    return Math.max(1, Math.round((hasta.getTime() - desde.getTime()) / MS_POR_DIA) + 1);
-  }
-
-  if (items.length === 0) return 1;
-
-  const tiempos = items.map(item => item.fecha.getTime());
-  const span = Math.max(...tiempos) - Math.min(...tiempos);
-  return Math.max(1, Math.round(span / MS_POR_DIA) + 1);
-};
-
+/**
+ * Las transferencias entre cuentas propias se descartan antes de cualquier
+ * cuenta: mover $500.000 de la cuenta de ahorros a la corriente no es un
+ * ingreso de $500.000 ni un gasto de $500.000, y contarlo como ambos inflaria
+ * las dos cifras dejando el balance intacto — el peor tipo de error, porque el
+ * total sigue cuadrando y nada parece roto.
+ */
 export const computeKpis = (
   actuales: Transaction[],
   anteriores: Transaction[],
-  goals: SavingsGoal[],
-  rango: { desde: Date | null; hasta: Date | null } = { desde: null, hasta: null }
+  goals: SavingsGoal[]
 ): KpiData => {
-  const pagadas = actuales.filter(esPagado);
+  const reales = actuales.filter(item => !esTransferencia(item));
+  const pagadas = reales.filter(esPagado);
 
-  const ingresos = pagadas.filter(item => item.tipo === 'Ingreso');
-  const gastos = pagadas.filter(item => item.tipo === 'Gasto');
-
-  const totalIngresos = sumar(ingresos);
-  const totalGastos = sumar(gastos);
+  const totalIngresos = sumar(pagadas.filter(item => item.tipo === 'Ingreso'));
+  const totalGastos = sumar(pagadas.filter(item => item.tipo === 'Gasto'));
   const beneficioNeto = totalIngresos - totalGastos;
 
-  const pendientes = actuales.filter(item => !esPagado(item));
+  const pendientes = reales.filter(item => !esPagado(item));
   const ingresosPendientes = sumar(pendientes.filter(item => item.tipo === 'Ingreso'));
   const gastosPendientes = sumar(pendientes.filter(item => item.tipo === 'Gasto'));
 
-  const mayorGastoIndividual = gastos.reduce(
-    (max, item) => Math.max(max, Math.abs(item.importe)),
-    0
-  );
-
-  const anterioresPagadas = anteriores.filter(esPagado);
+  const anterioresPagadas = anteriores.filter(item => !esTransferencia(item)).filter(esPagado);
   const ahorroPeriodoAnterior =
     sumar(anterioresPagadas.filter(item => item.tipo === 'Ingreso')) -
     sumar(anterioresPagadas.filter(item => item.tipo === 'Gasto'));
@@ -181,12 +141,6 @@ export const computeKpis = (
     beneficioNeto,
     ingresosPendientes,
     gastosPendientes,
-    numOperaciones: actuales.length,
-    ticketMedioGasto: gastos.length > 0 ? totalGastos / gastos.length : 0,
-    gastoPromedioDiario: totalGastos / diasDelPeriodo(gastos, rango.desde, rango.hasta),
-    mayorGastoIndividual,
-    categoriaMasGasto: mayorPorCategoria(pagadas, 'Gasto'),
-    categoriaMasRentable: mayorPorCategoria(pagadas, 'Ingreso'),
     ahorroPeriodoAnterior,
     variacionAhorro,
     tieneComparativo,
@@ -206,16 +160,17 @@ export const applyFilters = (
     if (filters.tipo !== 'Todos' && item.tipo !== filters.tipo) return false;
     if (filters.estadoPago !== 'Todos' && item.estado_pago !== filters.estadoPago) return false;
     if (filters.categorias.length > 0 && !filters.categorias.includes(item.categoria)) return false;
-    if (filters.canales.length > 0 && !filters.canales.includes(item.canal)) return false;
+    if (filters.cuentas.length > 0 && !filters.cuentas.includes(item.account_id ?? '')) return false;
 
     if (rango.desde && item.fecha < rango.desde) return false;
     if (rango.hasta && item.fecha > rango.hasta) return false;
 
+    // Ya no se busca por id: era un uuid, nadie escribe "a3f9c1e2" para
+    // encontrar un gasto.
     if (busqueda) {
       const enDescripcion = item.descripcion.toLowerCase().includes(busqueda);
       const enCategoria = item.categoria.toLowerCase().includes(busqueda);
-      const enId = item.id.toLowerCase().includes(busqueda);
-      if (!enDescripcion && !enCategoria && !enId) return false;
+      if (!enDescripcion && !enCategoria) return false;
     }
 
     return true;

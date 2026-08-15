@@ -1,16 +1,17 @@
 import React, { useRef, useState } from 'react';
 import { Download, Upload } from 'lucide-react';
-import type { Transaction } from '../../types';
+import type { Account, Transaction } from '../../types';
 import { downloadCsv, parseCsv } from '../../lib/csv';
 import { toDateString, today } from '../../lib/dates';
 import { errorMessage, useToast } from '../../lib/toast';
 
 interface DataSectionProps {
   transactions: Transaction[];
+  accounts: Account[];
   onImport: (rows: Array<Omit<Transaction, 'id' | 'user_id'>>) => Promise<number>;
 }
 
-const DataSection: React.FC<DataSectionProps> = ({ transactions, onImport }) => {
+const DataSection: React.FC<DataSectionProps> = ({ transactions, accounts, onImport }) => {
   const toast = useToast();
   const [importing, setImporting] = useState(false);
   const [errores, setErrores] = useState<string[]>([]);
@@ -21,7 +22,7 @@ const DataSection: React.FC<DataSectionProps> = ({ transactions, onImport }) => 
       toast.info('No hay movimientos para exportar');
       return;
     }
-    downloadCsv(transactions, `mis-finanzas-${toDateString(today())}.csv`);
+    downloadCsv(transactions, `mis-finanzas-${toDateString(today())}.csv`, accounts);
     toast.success(`${transactions.length} movimientos exportados`);
   };
 
@@ -32,7 +33,7 @@ const DataSection: React.FC<DataSectionProps> = ({ transactions, onImport }) => 
     setImporting(true);
     setErrores([]);
     try {
-      const { rows, errors } = parseCsv(await file.text());
+      const { rows, errors } = parseCsv(await file.text(), accounts);
 
       // Los errores se muestran en la pantalla, no en un toast: un archivo malo
       // puede tener decenas de filas con problemas y hay que poder leerlas.
@@ -71,7 +72,8 @@ const DataSection: React.FC<DataSectionProps> = ({ transactions, onImport }) => 
           <h3>Importar</h3>
           <p>
             Carga el extracto de tu banco en vez de digitarlo. Columnas: fecha (YYYY-MM-DD), tipo,
-            categoria, importe, y opcionalmente estado_pago, canal y descripcion.
+            categoria, importe, y opcionalmente estado_pago, cuenta y descripcion. Las filas sin
+            cuenta —o con un nombre que no existe— caen en <strong>{accounts[0]?.nombre ?? 'la primera'}</strong>.
           </p>
         </header>
 
