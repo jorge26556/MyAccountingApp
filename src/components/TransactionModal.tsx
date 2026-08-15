@@ -248,6 +248,8 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
       compra_id: null,
       cuota_numero: null,
       cuota_total: null,
+      debt_id: null,
+      recibo_path: null,
     });
   };
 

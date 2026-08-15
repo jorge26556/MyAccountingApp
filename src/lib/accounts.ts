@@ -21,11 +21,30 @@ import type { Account, Transaction } from '../types';
 /** Categoria reservada para las dos patas de una transferencia. */
 export const CATEGORIA_TRANSFERENCIA = 'Transferencia';
 
+/** Categoria reservada para los movimientos de una deuda. */
+export const CATEGORIA_PRESTAMO = 'Préstamo';
+
 export const esTransferencia = (item: Transaction): boolean => item.transfer_group !== null;
 
+export const esMovimientoDeDeuda = (item: Transaction): boolean => item.debt_id !== null;
+
+/**
+ * Movimientos que mueven saldo pero NO son ingreso ni gasto.
+ *
+ * Dos casos, y la razon es la misma en ambos: la plata cambia de sitio sin que
+ * tu patrimonio cambie.
+ *
+ *  - Pasar plata de Bancolombia a Nequi.
+ *  - Prestarle $500.000 a alguien: sale de tu cuenta pero sigue siendo tuya,
+ *    solo que la tiene otro. Contarlo como gasto inflaria el mes y hundiria tu
+ *    patrimonio; contar la devolucion como ingreso lo inflaria despues.
+ */
+export const esNeutro = (item: Transaction): boolean =>
+  esTransferencia(item) || esMovimientoDeDeuda(item);
+
 /** Movimientos que cuentan como ingreso o gasto de verdad. */
-export const sinTransferencias = (items: Transaction[]): Transaction[] =>
-  items.filter(item => !esTransferencia(item));
+export const soloIngresosYGastos = (items: Transaction[]): Transaction[] =>
+  items.filter(item => !esNeutro(item));
 
 export interface SaldoCuenta {
   cuenta: Account;

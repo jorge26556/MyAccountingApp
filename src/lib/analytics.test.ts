@@ -26,6 +26,8 @@ const tx = (fecha: string, importe: number, over: Partial<Transaction> = {}): Tr
     compra_id: null,
     cuota_numero: null,
     cuota_total: null,
+    debt_id: null,
+    recibo_path: null,
     ...over,
   };
 };

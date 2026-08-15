@@ -15,7 +15,7 @@ import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 
 import type { Transaction } from '../types';
-import { sinTransferencias } from '../lib/accounts';
+import { soloIngresosYGastos } from '../lib/accounts';
 import { formatCurrency, formatCurrencyCompact } from '../lib/format';
 import { toDateString } from '../lib/dates';
 import { gastoAcumuladoComparado, tendenciaPorCategoria } from '../lib/analytics';
@@ -58,8 +58,8 @@ const DashboardCharts: React.FC<DashboardChartsProps> = ({ data, allData }) => {
   // Mover plata entre cuentas propias no es gasto: si entrara aqui, una
   // transferencia de $1.000.000 apareceria como la categoria en la que mas
   // gastas.
-  const reales = useMemo(() => sinTransferencias(data), [data]);
-  const todasReales = useMemo(() => sinTransferencias(allData), [allData]);
+  const reales = useMemo(() => soloIngresosYGastos(data), [data]);
+  const todasReales = useMemo(() => soloIngresosYGastos(allData), [allData]);
 
   const charts = useMemo(() => {
     const monthlyMap = new Map<

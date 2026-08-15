@@ -1,5 +1,5 @@
 import type { Transaction, TransactionType } from '../types';
-import { esTransferencia } from './accounts';
+import { esNeutro } from './accounts';
 import { addMonths, today } from './dates';
 
 /**
@@ -32,7 +32,7 @@ export const normalizarTexto = (valor: string): string =>
 const enVentana = (transactions: Transaction[], hoy: Date): Transaction[] => {
   const desde = addMonths(hoy, -MESES_DE_VENTANA);
   return transactions
-    .filter(item => !esTransferencia(item) && item.fecha >= desde)
+    .filter(item => !esNeutro(item) && item.fecha >= desde)
     .sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
 };
 

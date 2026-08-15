@@ -282,6 +282,8 @@ export const generarRecurrentesPendientes = async (
       compra_id: data.compra_id ?? null,
       cuota_numero: data.cuota_numero ?? null,
       cuota_total: data.cuota_total ?? null,
+      debt_id: data.debt_id ?? null,
+      recibo_path: data.recibo_path ?? null,
     });
   }
 

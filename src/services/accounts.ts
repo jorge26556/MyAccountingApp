@@ -228,6 +228,8 @@ const mapTransaction = (row: Record<string, unknown>): Transaction => ({
   compra_id: (row.compra_id as string) ?? null,
   cuota_numero: (row.cuota_numero as number) ?? null,
   cuota_total: (row.cuota_total as number) ?? null,
+  debt_id: (row.debt_id as string) ?? null,
+  recibo_path: (row.recibo_path as string) ?? null,
 });
 
 /**

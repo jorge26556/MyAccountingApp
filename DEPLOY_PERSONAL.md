@@ -32,25 +32,45 @@ Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 | `supabase/002_presupuestos_recurrentes_cuenta.sql` | `budgets`, `recurring_transactions` y `delete_own_account()` | Aplicada |
 | `supabase/003_cuentas_saldos.sql` | `accounts`, `transactions.account_id`, `transfer_group` y el backfill | Aplicada |
 | `supabase/004_cuotas.sql` | `compra_id`, `cuota_numero` y `cuota_total` en `transactions` | **Pendiente** |
+| `supabase/005_deudas.sql` | `debts` y `transactions.debt_id` | **Pendiente** |
+| `supabase/006_recibos.sql` | Bucket `recibos` y `transactions.recibo_path` | **Pendiente** |
 
 Para reconstruir la base desde cero, córrelas en ese orden.
 
-### La 004 está pendiente
+### Las tres últimas están pendientes
 
-**Hay que ejecutarla a mano** en Supabase → SQL Editor. Mientras no se corra, la
-app funciona igual pero el modo **"A cuotas"** no aparece en el formulario de
-movimientos: no es un error, es la degradación a propósito.
+**Hay que ejecutarlas a mano** en Supabase → SQL Editor, en orden. Se pueden
+pegar las tres seguidas: las tres son idempotentes.
 
-La app deduce si las columnas existen mirando los datos que ya descarga, sin
-pedir nada extra. En cuanto ejecutes la migración y recargues, la opción sale
-sola.
+Mientras no se ejecuten, la app funciona igual y cada función simplemente no
+aparece. No es un error, es la degradación a propósito:
 
-Para comprobarlo:
+| Migración | Qué falta mientras tanto |
+|---|---|
+| 004 | El modo **"A cuotas"** no sale en el formulario |
+| 005 | El panel de **Deudas** no aparece en Inicio |
+| 006 | El botón **"Recibo"** no sale en la lista de movimientos |
+
+Cada una se detecta de forma distinta, y la razón importa:
+
+- **004** se deduce de los datos que la app ya descarga: si las filas traen la
+  clave `compra_id`, la migración corrió. Cero peticiones extra. Preguntar por
+  la columna con un `select` costaba un 400 en la consola en cada carga, y un
+  error rojo permanente que no significa nada es lo que hace que se dejen de
+  mirar los que sí significan algo.
+- **005** por el error `42P01` de tabla inexistente, igual que 002 y 003.
+- **006** con `getBucket`. **No sirve `list()`**: listar un bucket que no existe
+  devuelve una lista vacía sin error, indistinguible de un bucket recién creado,
+  y el botón aparecía para luego fallar al subir.
+
+Para comprobar que quedaron:
 
 ```sql
 select column_name from information_schema.columns
  where table_schema = 'public' and table_name = 'transactions'
-   and column_name in ('compra_id', 'cuota_numero', 'cuota_total');
+   and column_name in ('compra_id', 'cuota_numero', 'cuota_total', 'debt_id', 'recibo_path');
+
+select id, public from storage.buckets where id = 'recibos';
 ```
 
 ### Sobre la 003
@@ -155,6 +175,26 @@ sincronización ya ocurrió.
 
 El service worker sigue con la prohibición de cachear respuestas de Supabase.
 La diferencia es que el ciclo de vida de IndexedDB sí lo controla la app.
+
+## Fotos de recibos
+
+Van a un bucket **privado** (`recibos`). Una foto de recibo lleva nombres,
+montos y a veces direcciones: un bucket público las dejaría accesibles a
+cualquiera que adivine la URL, sin sesión.
+
+Se leen con URLs firmadas de una hora que genera la app en el momento. En la
+base se guarda solo la **ruta**, nunca una URL: las firmadas caducan y dejarían
+enlaces muertos a los pocos minutos.
+
+Cada archivo vive en una carpeta con el uid del dueño, y la política de Storage
+lo comprueba contra `auth.uid()`. No es una convención de nombres: es la regla
+que aplica Postgres.
+
+```sql
+-- Cuánto ocupan los recibos, por si el plan gratuito aprieta:
+select count(*) as archivos, pg_size_pretty(sum((metadata->>'size')::bigint)) as peso
+  from storage.objects where bucket_id = 'recibos';
+```
 
 El linter de Supabase marca `delete_own_account` como ejecutable por usuarios
 autenticados. **Es intencional**: para darse de baja hay que poder invocarla.

@@ -1,6 +1,6 @@
 import type { Transaction } from '../types';
 import type { RecurringTransaction } from '../services/extras';
-import { esTransferencia } from './accounts';
+import { esNeutro } from './accounts';
 import { addMonths, endOfMonth, startOfMonth, toMonthKey, today } from './dates';
 
 /**
@@ -12,14 +12,15 @@ import { addMonths, endOfMonth, startOfMonth, toMonthKey, today } from './dates'
  * anterior y proyectan el cierre.
  */
 
-// Una transferencia entre tus propias cuentas no es gasto ni ingreso. Si se
-// colara aqui, mover plata de un bolsillo a otro dispararia las graficas de
-// gasto y te haria creer que estas gastando el doble.
+// Ni las transferencias entre cuentas propias ni los movimientos de una deuda
+// son gasto o ingreso. Si se colaran aqui, pasar plata de un bolsillo a otro
+// —o prestarle a alguien— dispararia las graficas de gasto y te haria creer que
+// gastas el doble de lo que gastas.
 const esGastoPagado = (t: Transaction) =>
-  t.tipo === 'Gasto' && t.estado_pago === 'Pagado' && !esTransferencia(t);
+  t.tipo === 'Gasto' && t.estado_pago === 'Pagado' && !esNeutro(t);
 
 const esIngresoPagado = (t: Transaction) =>
-  t.tipo === 'Ingreso' && t.estado_pago === 'Pagado' && !esTransferencia(t);
+  t.tipo === 'Ingreso' && t.estado_pago === 'Pagado' && !esNeutro(t);
 
 export interface AcumuladoDia {
   dia: number;
@@ -332,7 +333,7 @@ export const disponibleDelMes = (
   // asi que entran igual: por eso el corte es "hasta fin de mes", no "de este
   // mes". Un recibo de julio sin pagar no deja de existir en agosto.
   const pendientes = transactions.filter(
-    item => item.estado_pago === 'Pendiente' && item.fecha <= finMes && !esTransferencia(item)
+    item => item.estado_pago === 'Pendiente' && item.fecha <= finMes && !esNeutro(item)
   );
 
   const pendientesGasto = sumar(pendientes.filter(item => item.tipo === 'Gasto'));

@@ -213,6 +213,10 @@ export const parseCsv = (contenido: string, accounts: Account[] = []): CsvParseR
       compra_id: null,
       cuota_numero: null,
       cuota_total: null,
+      // Tampoco el vinculo con una deuda ni el recibo: el primero apunta a una
+      // ficha que el CSV no trae, y el segundo a un archivo en Storage.
+      debt_id: null,
+      recibo_path: null,
     });
   });
 

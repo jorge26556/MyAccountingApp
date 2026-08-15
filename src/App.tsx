@@ -18,6 +18,9 @@ import SaldoHero from './components/SaldoHero';
 import AgendaPanel from './components/AgendaPanel';
 import BudgetsPanel from './components/BudgetsPanel';
 import AccountMenu from './components/AccountMenu';
+import DeudasPanel from './components/DeudasPanel';
+import DeudaModal from './components/DeudaModal';
+import type { AbonoInput, NuevaDeudaInput } from './components/DeudaModal';
 
 // recharts pesa mas que todo el resto de la app junta. Cargarlo aparte deja que
 // las vistas de transacciones y configuracion no lo descarguen nunca.
@@ -36,7 +39,7 @@ import {
   movimientosSinCuenta,
   saldoTotal,
   saldosPorCuenta,
-  sinTransferencias,
+  soloIngresosYGastos,
 } from './lib/accounts';
 import { formatCurrency, formatPercent } from './lib/format';
 import { downloadCsv } from './lib/csv';
@@ -59,6 +62,16 @@ import {
   updateTransaction,
 } from './services/api';
 import { createCompraACuotas, cuotasDisponibles, deleteCompra } from './services/cuotas';
+import {
+  createDebt,
+  deleteDebt,
+  fetchDebts,
+  registrarMovimientoDeDeuda,
+  updateDebt,
+} from './services/deudas';
+import { borrarRecibo, recibosDisponibles, subirRecibo } from './services/recibos';
+import { resumenDeudas, type EstadoDeuda } from './lib/deudas';
+import { actualizarBadge } from './lib/badge';
 import { borrarSnapshots, estaEnLinea, guardarSnapshot, leerSnapshot } from './lib/offline';
 import {
   createAccount,
@@ -85,6 +98,7 @@ import type {
   AccountType,
   Category,
   DashboardFilters,
+  Debt,
   SavingsGoal,
   Transaction,
 } from './types';
@@ -94,6 +108,9 @@ type ModalState =
   | { mode: 'create' }
   | { mode: 'edit'; tx: Transaction }
   | { mode: 'repeat'; tx: Transaction };
+
+/** El modal de deudas: crear una nueva, o abonar a una existente. */
+type DeudaModalState = null | { modo: 'nueva' } | { modo: 'abono'; estado: EstadoDeuda };
 
 const App: React.FC = () => {
   const toast = useToast();
@@ -113,6 +130,10 @@ const App: React.FC = () => {
   const [cuentas, setCuentas] = useState<Account[]>([]);
   const [hayCuentas, setHayCuentas] = useState(false);
   const [hayCuotas, setHayCuotas] = useState(false);
+  const [deudas, setDeudas] = useState<Debt[]>([]);
+  const [hayDeudas, setHayDeudas] = useState(false);
+  const [hayRecibos, setHayRecibos] = useState(false);
+  const [deudaModal, setDeudaModal] = useState<DeudaModalState>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -181,6 +202,7 @@ const App: React.FC = () => {
         setBudgets([]);
         setRecurrentes([]);
         setCuentas([]);
+        setDeudas([]);
         // El snapshot sobrevive al cierre de la app a proposito, pero no al
         // cierre de sesion: son saldos y movimientos en el disco del
         // dispositivo. La cola SI se conserva —son movimientos que el usuario
@@ -224,16 +246,26 @@ const App: React.FC = () => {
     }
 
     try {
-      const [transactions, categoryList, goalsList, budgetList, recurringList, accountList] =
-        await Promise.all([
-          fetchTransactions(),
-          fetchCategories(),
-          fetchSavingsGoals(),
-          fetchBudgets(),
-          fetchRecurring(),
-          fetchAccounts(),
-        ]);
+      const [
+        transactions,
+        categoryList,
+        goalsList,
+        budgetList,
+        recurringList,
+        accountList,
+        debtList,
+      ] = await Promise.all([
+        fetchTransactions(),
+        fetchCategories(),
+        fetchSavingsGoals(),
+        fetchBudgets(),
+        fetchRecurring(),
+        fetchAccounts(),
+        fetchDebts(),
+      ]);
 
+      setDeudas(debtList.datos);
+      setHayDeudas(debtList.disponible);
       setCategories(categoryList);
       setSavingsGoals(goalsList);
       setBudgets(budgetList.datos);
@@ -253,6 +285,10 @@ const App: React.FC = () => {
       const deducido = hayColumnasDeCuotas();
       if (deducido === null) void cuotasDisponibles().then(setHayCuotas);
       else setHayCuotas(deducido);
+
+      // El bucket de recibos no se puede deducir de los datos: hay que
+      // preguntarle a Storage. Es una sola llamada por carga.
+      void recibosDisponibles().then(setHayRecibos);
 
       // Los recurrentes que ya tocan este mes se materializan al abrir la app.
       // Se agregan al estado en vez de recargar: la insercion ya devolvio la
@@ -404,6 +440,19 @@ const App: React.FC = () => {
 
   const agenda = useMemo(() => construirAgenda(data, recurrentes), [data, recurrentes]);
 
+  const deudasResumen = useMemo(() => resumenDeudas(deudas, data), [deudas, data]);
+
+  /**
+   * El contador sobre el icono de la app instalada.
+   *
+   * Es lo mas cerca que se puede estar de una notificacion sin montar
+   * infraestructura de push (servidor, claves VAPID, permisos, una Edge
+   * Function que despierte al usuario). Donde la API no existe, no pasa nada.
+   */
+  useEffect(() => {
+    actualizarBadge(agenda.urgentes.length);
+  }, [agenda.urgentes.length]);
+
   const disponible = useMemo(
     () => disponibleDelMes(data, recurrentes, total),
     [data, recurrentes, total]
@@ -425,7 +474,7 @@ const App: React.FC = () => {
   const availableCategorias = useMemo(
     () =>
       Array.from(
-        new Set([...categoryNames, ...sinTransferencias(data).map(item => item.categoria)])
+        new Set([...categoryNames, ...soloIngresosYGastos(data).map(item => item.categoria)])
       ).sort((a, b) => a.localeCompare(b)),
     [categoryNames, data]
   );
@@ -516,6 +565,88 @@ const App: React.FC = () => {
         setData(prev => ordenarPorFecha([...prev, ...afectadas]));
       },
     });
+  };
+
+  /* ────────────────────────────── deudas ──────────────────────────────── */
+
+  const handleCrearDeuda = async (input: NuevaDeudaInput) => {
+    const { deuda, movimiento } = await createDebt(input);
+    setDeudas(prev => [deuda, ...prev]);
+    setData(prev => ordenarPorFecha([movimiento, ...prev]));
+    toast.success(
+      input.tipo === 'me_deben'
+        ? `Préstamo a ${deuda.persona} registrado`
+        : `Préstamo de ${deuda.persona} registrado`
+    );
+  };
+
+  const handleAbonar = async (input: AbonoInput) => {
+    const movimiento = await registrarMovimientoDeDeuda({
+      deuda: input.estado.deuda,
+      operacion: 'abono',
+      importe: input.importe,
+      fecha: input.fecha,
+      account_id: input.account_id,
+    });
+
+    setData(prev => ordenarPorFecha([movimiento, ...prev]));
+
+    const restante = input.estado.pendiente - input.importe;
+    toast.success(
+      restante > 0
+        ? `Registrado. Quedan ${formatCurrency(restante)}`
+        : `Deuda con ${input.estado.deuda.persona} saldada`
+    );
+  };
+
+  const handleArchivarDeuda = async (estado: EstadoDeuda) => {
+    try {
+      const actualizada = await updateDebt(estado.deuda.id, { archivada: true });
+      setDeudas(prev => prev.map(item => (item.id === actualizada.id ? actualizada : item)));
+      toast.success('Deuda archivada', {
+        label: 'Deshacer',
+        onClick: () => {
+          void updateDebt(estado.deuda.id, { archivada: false }).then(vuelta =>
+            setDeudas(prev => prev.map(item => (item.id === vuelta.id ? vuelta : item)))
+          );
+        },
+      });
+    } catch (err) {
+      toast.error(errorMessage(err, 'No se pudo archivar la deuda'));
+    }
+  };
+
+  /**
+   * Borra la ficha, no los movimientos: la plata se movio de verdad y borrar el
+   * historial descuadraria los saldos. Al quedarse sin `debt_id` esos
+   * movimientos vuelven a contar como gasto o ingreso normal, que es justo lo
+   * que son si la deuda se dio por perdida.
+   */
+  const handleEliminarDeuda = async (estado: EstadoDeuda) => {
+    try {
+      await deleteDebt(estado.deuda.id);
+      setDeudas(prev => prev.filter(item => item.id !== estado.deuda.id));
+      setData(prev =>
+        prev.map(item => (item.debt_id === estado.deuda.id ? { ...item, debt_id: null } : item))
+      );
+      toast.success('Deuda eliminada. Sus movimientos se conservan.');
+    } catch (err) {
+      toast.error(errorMessage(err, 'No se pudo eliminar la deuda'));
+    }
+  };
+
+  /* ────────────────────────────── recibos ─────────────────────────────── */
+
+  const handleAdjuntarRecibo = async (tx: Transaction, archivo: File) => {
+    const ruta = await subirRecibo(tx.id, archivo);
+    const actualizado = await updateTransaction(tx.id, { recibo_path: ruta });
+    setData(prev => prev.map(item => (item.id === tx.id ? actualizado : item)));
+  };
+
+  const handleQuitarRecibo = async (tx: Transaction) => {
+    if (tx.recibo_path) await borrarRecibo(tx.recibo_path);
+    const actualizado = await updateTransaction(tx.id, { recibo_path: null });
+    setData(prev => prev.map(item => (item.id === tx.id ? actualizado : item)));
   };
 
   const handleCompra = async (input: CompraInput) => {
@@ -740,6 +871,16 @@ const App: React.FC = () => {
 
       <AgendaPanel agenda={agenda} onMarcarPagado={handleMarcarPagado} />
 
+      {hayDeudas && (
+        <DeudasPanel
+          resumen={deudasResumen}
+          onNueva={() => setDeudaModal({ modo: 'nueva' })}
+          onAbonar={estado => setDeudaModal({ modo: 'abono', estado })}
+          onArchivar={handleArchivarDeuda}
+          onEliminar={handleEliminarDeuda}
+        />
+      )}
+
       <BudgetsPanel estados={presupuestos} />
 
       <div className="dashboard-divider">
@@ -868,9 +1009,13 @@ const App: React.FC = () => {
               <TransactionsTable
                 transactions={filteredData}
                 accounts={cuentas}
+                hayRecibos={hayRecibos}
+                enLinea={enLinea}
                 onEdit={tx => setModalState({ mode: 'edit', tx })}
                 onRepeat={tx => setModalState({ mode: 'repeat', tx })}
                 onDelete={handleDeleteTransaction}
+                onAdjuntarRecibo={handleAdjuntarRecibo}
+                onQuitarRecibo={handleQuitarRecibo}
               />
             </>
           }
@@ -923,6 +1068,16 @@ const App: React.FC = () => {
           onCompra={handleCompra}
           editingTransaction={modalState.mode === 'edit' ? modalState.tx : undefined}
           prefill={modalState.mode === 'repeat' ? modalState.tx : undefined}
+        />
+      )}
+
+      {deudaModal !== null && (
+        <DeudaModal
+          accounts={cuentas}
+          abonarA={deudaModal.modo === 'abono' ? deudaModal.estado : undefined}
+          onClose={() => setDeudaModal(null)}
+          onCrear={handleCrearDeuda}
+          onAbonar={handleAbonar}
         />
       )}
 

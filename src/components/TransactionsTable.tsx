@@ -1,20 +1,26 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { ArrowLeftRight, ChevronLeft, ChevronRight, ChevronsUpDown, Copy, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeftRight, ChevronLeft, ChevronRight, ChevronsUpDown, Copy, HandCoins, Pencil, Trash2 } from 'lucide-react';
 import type { Account, Transaction } from '../types';
-import { esTransferencia } from '../lib/accounts';
+import { esMovimientoDeDeuda, esNeutro, esTransferencia } from '../lib/accounts';
 import { esIdLocal } from '../lib/offline';
 import { formatCurrency } from '../lib/format';
 import { useIsMobile } from '../lib/useMediaQuery';
+import ReciboAdjunto from './ReciboAdjunto';
 
 interface TransactionsTableProps {
   transactions: Transaction[];
   accounts: Account[];
+  /** El bucket de recibos existe (migración 006 ejecutada). */
+  hayRecibos: boolean;
+  enLinea: boolean;
   onEdit: (transaction: Transaction) => void;
   /** `compraCompleta` borra las N cuotas de la compra, no solo esta. */
   onDelete: (transaction: Transaction, compraCompleta?: boolean) => void;
   onRepeat: (transaction: Transaction) => void;
+  onAdjuntarRecibo: (transaction: Transaction, archivo: File) => Promise<void>;
+  onQuitarRecibo: (transaction: Transaction) => Promise<void>;
 }
 
 type SortKey = 'fecha' | 'importe' | 'categoria' | 'cuenta';
@@ -24,9 +30,13 @@ const ITEMS_PER_PAGE = 15;
 const TransactionsTable: React.FC<TransactionsTableProps> = ({
   transactions,
   accounts,
+  hayRecibos,
+  enLinea,
   onEdit,
   onDelete,
   onRepeat,
+  onAdjuntarRecibo,
+  onQuitarRecibo,
 }) => {
   const isMobile = useIsMobile();
   const [currentPage, setCurrentPage] = useState(1);
@@ -171,6 +181,9 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
           const esGasto = item.tipo === 'Gasto';
           const enBorrado = activeDeleteId === item.id;
           const transferencia = esTransferencia(item);
+          // Ni transferencias ni deudas se pintan de rojo o verde: la plata
+          // cambio de sitio sin que el patrimonio cambiara.
+          const neutro = esNeutro(item);
           // Todavia no existe en el servidor: no se puede editar ni borrar
           // alla. Se sube solo en cuanto haya señal.
           const sinSubir = esIdLocal(item.id);
@@ -186,7 +199,7 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                   {item.descripcion && <p className="tx-card__desc">{item.descripcion}</p>}
                 </div>
                 <span
-                  className={`tx-card__importe ${transferencia ? 'is-transfer' : esGasto ? 'is-gasto' : 'is-ingreso'}`}
+                  className={`tx-card__importe ${neutro ? 'is-transfer' : esGasto ? 'is-gasto' : 'is-ingreso'}`}
                 >
                   {esGasto ? '−' : '+'}
                   {formatCurrency(Math.abs(item.importe))}
@@ -202,6 +215,7 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                     {item.cuota_numero}/{item.cuota_total}
                   </span>
                 )}
+                {item.debt_id && <span className="badge badge-deuda">Deuda</span>}
                 {item.estado_pago === 'Pendiente' && <span className="badge badge-pending">Pendiente</span>}
                 {sinSubir && <span className="badge badge-local">Sin subir</span>}
               </div>
@@ -225,6 +239,14 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                         <Pencil size={15} /> Editar
                       </button>
                     </>
+                  )}
+                  {hayRecibos && (
+                    <ReciboAdjunto
+                      transaction={item}
+                      enLinea={enLinea}
+                      onAdjuntar={onAdjuntarRecibo}
+                      onQuitar={onQuitarRecibo}
+                    />
                   )}
                   <button type="button" className="is-danger" onClick={() => setDeletingId(item.id)}>
                     <Trash2 size={15} /> Eliminar
@@ -271,6 +293,7 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
               const esGasto = item.tipo === 'Gasto';
               const enBorrado = activeDeleteId === item.id;
               const transferencia = esTransferencia(item);
+              const neutro = esNeutro(item);
               const sinSubir = esIdLocal(item.id);
 
               return (
@@ -283,6 +306,11 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                           <ArrowLeftRight size={12} />
                           {esGasto ? 'Salida' : 'Entrada'}
                         </span>
+                      ) : esMovimientoDeDeuda(item) ? (
+                        <span className="badge-transfer">
+                          <HandCoins size={12} />
+                          {esGasto ? 'Prestado' : 'Recibido'}
+                        </span>
                       ) : (
                         <span className={esGasto ? 'badge-expense' : 'badge-income'}>{item.tipo}</span>
                       )}
@@ -290,7 +318,7 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                     <td>{item.categoria}</td>
                     <td>{nombreCuenta(item)}</td>
                     <td
-                      className={`tx-table__importe ${transferencia ? 'is-transfer' : esGasto ? 'is-gasto' : 'is-ingreso'}`}
+                      className={`tx-table__importe ${neutro ? 'is-transfer' : esGasto ? 'is-gasto' : 'is-ingreso'}`}
                     >
                       {esGasto ? '−' : '+'}
                       {formatCurrency(Math.abs(item.importe))}

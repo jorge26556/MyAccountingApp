@@ -6,7 +6,7 @@ import type {
   SavingsGoal,
   Transaction,
 } from '../types';
-import { esTransferencia } from './accounts';
+import { esNeutro } from './accounts';
 import { addMonths, endOfMonth, startOfMonth, today } from './dates';
 
 /**
@@ -109,7 +109,7 @@ export const computeKpis = (
   anteriores: Transaction[],
   goals: SavingsGoal[]
 ): KpiData => {
-  const reales = actuales.filter(item => !esTransferencia(item));
+  const reales = actuales.filter(item => !esNeutro(item));
   const pagadas = reales.filter(esPagado);
 
   const totalIngresos = sumar(pagadas.filter(item => item.tipo === 'Ingreso'));
@@ -120,7 +120,7 @@ export const computeKpis = (
   const ingresosPendientes = sumar(pendientes.filter(item => item.tipo === 'Ingreso'));
   const gastosPendientes = sumar(pendientes.filter(item => item.tipo === 'Gasto'));
 
-  const anterioresPagadas = anteriores.filter(item => !esTransferencia(item)).filter(esPagado);
+  const anterioresPagadas = anteriores.filter(item => !esNeutro(item)).filter(esPagado);
   const ahorroPeriodoAnterior =
     sumar(anterioresPagadas.filter(item => item.tipo === 'Ingreso')) -
     sumar(anterioresPagadas.filter(item => item.tipo === 'Gasto'));

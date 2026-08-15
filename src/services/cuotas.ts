@@ -52,6 +52,8 @@ const mapTransaction = (row: Record<string, unknown>): Transaction => ({
   compra_id: (row.compra_id as string) ?? null,
   cuota_numero: row.cuota_numero === null || row.cuota_numero === undefined ? null : Number(row.cuota_numero),
   cuota_total: row.cuota_total === null || row.cuota_total === undefined ? null : Number(row.cuota_total),
+  debt_id: (row.debt_id as string) ?? null,
+  recibo_path: (row.recibo_path as string) ?? null,
 });
 
 export interface CompraACuotas {

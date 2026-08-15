@@ -76,6 +76,37 @@ export type Database = {
         };
         Relationships: [];
       };
+      /** Migración 005. La app degrada sola si la tabla aún no existe. */
+      debts: {
+        Row: {
+          archivada: boolean;
+          created_at: string;
+          descripcion: string;
+          id: string;
+          persona: string;
+          tipo: string;
+          user_id: string;
+        };
+        Insert: {
+          archivada?: boolean;
+          created_at?: string;
+          descripcion?: string;
+          id?: string;
+          persona: string;
+          tipo: string;
+          user_id: string;
+        };
+        Update: {
+          archivada?: boolean;
+          created_at?: string;
+          descripcion?: string;
+          id?: string;
+          persona?: string;
+          tipo?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
       categories: {
         Row: {
           created_at: string;
@@ -204,11 +235,15 @@ export type Database = {
           created_at: string | null;
           cuota_numero?: number | null;
           cuota_total?: number | null;
+          /** Migración 005. Ausente si aún no se ejecutó. */
+          debt_id?: string | null;
           descripcion: string | null;
           estado_pago: string;
           fecha: string;
           id: string;
           importe: number;
+          /** Migración 006. Ausente si aún no se ejecutó. */
+          recibo_path?: string | null;
           tipo: string;
           transfer_group: string | null;
           user_id: string;

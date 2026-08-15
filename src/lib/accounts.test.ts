@@ -6,7 +6,7 @@ import {
   nombreDeCuenta,
   saldoTotal,
   saldosPorCuenta,
-  sinTransferencias,
+  soloIngresosYGastos,
 } from './accounts';
 import type { Account, Transaction } from '../types';
 
@@ -35,6 +35,8 @@ const tx = (over: Partial<Transaction> = {}): Transaction => ({
   compra_id: null,
   cuota_numero: null,
   cuota_total: null,
+  debt_id: null,
+  recibo_path: null,
   ...over,
 });
 
@@ -149,9 +151,9 @@ describe('transferencias', () => {
     expect(esTransferencia(tx({ transfer_group: 'x' }))).toBe(true);
   });
 
-  it('sinTransferencias las filtra y conserva el resto', () => {
+  it('soloIngresosYGastos las filtra y conserva el resto', () => {
     const items = [tx(), transferencia(), tx()];
-    expect(sinTransferencias(items)).toHaveLength(2);
+    expect(soloIngresosYGastos(items)).toHaveLength(2);
   });
 });
 

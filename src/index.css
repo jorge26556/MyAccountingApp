@@ -426,6 +426,11 @@ button:disabled {
   color: var(--warning);
 }
 
+.badge-deuda {
+  background-color: rgba(88, 166, 255, 0.15);
+  color: var(--accent-primary);
+}
+
 .app-footer {
   margin-top: 4rem;
   text-align: center;

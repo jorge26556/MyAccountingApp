@@ -18,6 +18,8 @@ const tx = (over: Partial<Transaction> = {}): Transaction => ({
   compra_id: null,
   cuota_numero: null,
   cuota_total: null,
+  debt_id: null,
+  recibo_path: null,
   ...over,
 });
 

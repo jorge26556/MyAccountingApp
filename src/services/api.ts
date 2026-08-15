@@ -71,6 +71,8 @@ const construirTransaccion = (row: Tables<'transactions'>): Transaction => ({
   compra_id: row.compra_id ?? null,
   cuota_numero: row.cuota_numero ?? null,
   cuota_total: row.cuota_total ?? null,
+  debt_id: row.debt_id ?? null,
+  recibo_path: row.recibo_path ?? null,
 });
 
 /* ────────────────────────────── transacciones ────────────────────────────── */
@@ -268,6 +270,9 @@ export const updateTransaction = async (
   if (changes.estado_pago !== undefined) payload.estado_pago = changes.estado_pago;
   if (changes.descripcion !== undefined) payload.descripcion = changes.descripcion;
   if (changes.account_id !== undefined) payload.account_id = changes.account_id;
+  // Solo viaja si quien llama lo pidio: mandarlo siempre reventaria con
+  // PGRST204 mientras la migracion 006 no se haya ejecutado.
+  if (changes.recibo_path !== undefined) payload.recibo_path = changes.recibo_path;
 
   const { data, error } = await supabase
     .from('transactions')

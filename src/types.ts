@@ -64,6 +64,26 @@ export interface Transaction {
   compra_id: string | null;
   cuota_numero: number | null;
   cuota_total: number | null;
+  /**
+   * Deuda a la que pertenece el movimiento.
+   *
+   * Prestar plata la saca de la cuenta pero no es un gasto: sigue siendo tuya,
+   * solo que la tiene otro. Igual que las transferencias, estos movimientos
+   * mueven saldos y no cuentan como ingreso ni como gasto.
+   */
+  debt_id: string | null;
+  /** Ruta dentro del bucket `recibos`. Nunca una URL: las firmadas caducan. */
+  recibo_path: string | null;
+}
+
+export type TipoDeuda = 'me_deben' | 'debo';
+
+export interface Debt {
+  id: string;
+  persona: string;
+  tipo: TipoDeuda;
+  descripcion: string;
+  archivada: boolean;
 }
 
 export interface Category {
