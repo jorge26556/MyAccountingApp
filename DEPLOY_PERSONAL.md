@@ -31,27 +31,17 @@ Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 | `supabase/schema.sql` | Tablas base, RLS, trigger de perfiles, constraints e índices | Aplicada |
 | `supabase/002_presupuestos_recurrentes_cuenta.sql` | `budgets`, `recurring_transactions` y `delete_own_account()` | Aplicada |
 | `supabase/003_cuentas_saldos.sql` | `accounts`, `transactions.account_id`, `transfer_group` y el backfill | Aplicada |
-| `supabase/004_cuotas.sql` | `compra_id`, `cuota_numero` y `cuota_total` en `transactions` | **Pendiente** |
-| `supabase/005_deudas.sql` | `debts` y `transactions.debt_id` | **Pendiente** |
-| `supabase/006_recibos.sql` | Bucket `recibos` y `transactions.recibo_path` | **Pendiente** |
+| `supabase/004_cuotas.sql` | `compra_id`, `cuota_numero` y `cuota_total` en `transactions` | Aplicada |
+| `supabase/005_deudas.sql` | `debts` y `transactions.debt_id` | Aplicada |
+| `supabase/006_recibos.sql` | Bucket `recibos` y `transactions.recibo_path` | Aplicada |
 
 Para reconstruir la base desde cero, córrelas en ese orden.
 
-### Las tres últimas están pendientes
+### Cómo detecta la app cada migración
 
-**Hay que ejecutarlas a mano** en Supabase → SQL Editor, en orden. Se pueden
-pegar las tres seguidas: las tres son idempotentes.
-
-Mientras no se ejecuten, la app funciona igual y cada función simplemente no
-aparece. No es un error, es la degradación a propósito:
-
-| Migración | Qué falta mientras tanto |
-|---|---|
-| 004 | El modo **"A cuotas"** no sale en el formulario |
-| 005 | El panel de **Deudas** no aparece en Inicio |
-| 006 | El botón **"Recibo"** no sale en la lista de movimientos |
-
-Cada una se detecta de forma distinta, y la razón importa:
+Todas están aplicadas, pero la detección sigue viva: es lo que permite
+desplegar el código antes que la migración sin romper nada. Cada una se
+comprueba distinto, y la razón importa:
 
 - **004** se deduce de los datos que la app ya descarga: si las filas traen la
   clave `compra_id`, la migración corrió. Cero peticiones extra. Preguntar por
@@ -59,11 +49,14 @@ Cada una se detecta de forma distinta, y la razón importa:
   error rojo permanente que no significa nada es lo que hace que se dejen de
   mirar los que sí significan algo.
 - **005** por el error `42P01` de tabla inexistente, igual que 002 y 003.
-- **006** con `getBucket`. **No sirve `list()`**: listar un bucket que no existe
-  devuelve una lista vacía sin error, indistinguible de un bucket recién creado,
-  y el botón aparecía para luego fallar al subir.
+- **006** con `getBucket`. Ninguna otra comprobación desde el cliente sirve:
+  `list()` sobre un bucket ausente devuelve **lista vacía sin error**, y
+  `createSignedUrl` responde `"Object not found"` tanto si falta el objeto como
+  si falta el bucket entero. Y `getBucket` solo funciona gracias a la política
+  `recibos_bucket_visible` — sin ella devuelve 404 aunque el bucket exista,
+  porque RLS oculta la fila de `storage.buckets`.
 
-Para comprobar que quedaron:
+Si alguna función no aparece, esto dice por qué:
 
 ```sql
 select column_name from information_schema.columns
@@ -71,6 +64,21 @@ select column_name from information_schema.columns
    and column_name in ('compra_id', 'cuota_numero', 'cuota_total', 'debt_id', 'recibo_path');
 
 select id, public from storage.buckets where id = 'recibos';
+
+-- Sin esta política el botón de adjuntar no sale nunca:
+select policyname from pg_policies
+ where schemaname = 'storage' and tablename = 'buckets'
+   and policyname = 'recibos_bucket_visible';
+```
+
+### Cuadrar una compra a cuotas
+
+La suma de las cuotas siempre es exactamente el total: la última absorbe el
+sobrante del redondeo (1.000.000 en 3 → 333.333 + 333.333 + **333.334**).
+
+```sql
+select compra_id, count(*) as cuotas, sum(importe) as total
+  from public.transactions where compra_id is not null group by compra_id;
 ```
 
 ### Sobre la 003

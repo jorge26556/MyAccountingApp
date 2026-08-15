@@ -76,7 +76,6 @@ export type Database = {
         };
         Relationships: [];
       };
-      /** Migración 005. La app degrada sola si la tabla aún no existe. */
       debts: {
         Row: {
           archivada: boolean;
@@ -226,24 +225,17 @@ export type Database = {
           account_id: string | null;
           canal: string | null;
           categoria: string;
-          /**
-           * Las tres columnas de cuotas vienen de la migracion 004. Si aun no
-           * se ejecuto, PostgREST no las devuelve y llegan `undefined`; por eso
-           * todo lector las normaliza con `?? null`.
-           */
-          compra_id?: string | null;
+          compra_id: string | null;
           created_at: string | null;
-          cuota_numero?: number | null;
-          cuota_total?: number | null;
-          /** Migración 005. Ausente si aún no se ejecutó. */
-          debt_id?: string | null;
+          cuota_numero: number | null;
+          cuota_total: number | null;
+          debt_id: string | null;
           descripcion: string | null;
           estado_pago: string;
           fecha: string;
           id: string;
           importe: number;
-          /** Migración 006. Ausente si aún no se ejecutó. */
-          recibo_path?: string | null;
+          recibo_path: string | null;
           tipo: string;
           transfer_group: string | null;
           user_id: string;
@@ -252,12 +244,17 @@ export type Database = {
           account_id?: string | null;
           canal?: string | null;
           categoria: string;
+          compra_id?: string | null;
           created_at?: string | null;
+          cuota_numero?: number | null;
+          cuota_total?: number | null;
+          debt_id?: string | null;
           descripcion?: string | null;
           estado_pago: string;
           fecha?: string;
           id?: string;
           importe: number;
+          recibo_path?: string | null;
           tipo: string;
           transfer_group?: string | null;
           user_id: string;
@@ -266,12 +263,17 @@ export type Database = {
           account_id?: string | null;
           canal?: string | null;
           categoria?: string;
+          compra_id?: string | null;
           created_at?: string | null;
+          cuota_numero?: number | null;
+          cuota_total?: number | null;
+          debt_id?: string | null;
           descripcion?: string | null;
           estado_pago?: string;
           fecha?: string;
           id?: string;
           importe?: number;
+          recibo_path?: string | null;
           tipo?: string;
           transfer_group?: string | null;
           user_id?: string;

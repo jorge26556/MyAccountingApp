@@ -33,7 +33,28 @@ on conflict (id) do update
       allowed_mime_types = excluded.allowed_mime_types;
 
 
--- ───────────────────────── políticas de acceso ──────────────────────────────
+-- ──────────────────── la ficha del bucket, visible ──────────────────────────
+-- `storage.buckets` también tiene RLS. Sin una política de lectura,
+-- `getBucket('recibos')` devuelve **404 "Bucket not found" aunque el bucket
+-- exista**: RLS oculta la fila y Storage lo reporta como inexistente.
+--
+-- Eso importa porque es justo así como la app decide si ofrecer el botón de
+-- adjuntar. Sin esta política la función quedaba escondida para siempre, y
+-- ninguna comprobación desde el cliente podía notar la diferencia:
+-- `list()` sobre un bucket ausente devuelve lista vacía sin error, y
+-- `createSignedUrl` responde "Object not found" en los dos casos.
+--
+-- Solo expone que el bucket existe y su configuración. Los ARCHIVOS los
+-- siguen gobernando las políticas sobre `storage.objects` de más abajo.
+
+drop policy if exists "recibos_bucket_visible" on storage.buckets;
+
+create policy "recibos_bucket_visible" on storage.buckets
+  for select to authenticated
+  using (id = 'recibos');
+
+
+-- ───────────────────── políticas de acceso a archivos ───────────────────────
 -- `storage.foldername(name)` parte la ruta: para "<uid>/2026/archivo.jpg"
 -- devuelve {<uid>, 2026}. El primer segmento tiene que ser el uid de quien
 -- llama, así que nadie puede leer ni escribir en la carpeta de otro.

@@ -38,15 +38,20 @@ const requireUserId = async (): Promise<string> => {
 /**
  * Si el bucket existe, para no ofrecer un boton que solo puede fallar.
  *
- * Se usa `getBucket` y no `list`: listar un bucket que no existe devuelve una
- * lista VACIA sin error ninguno, indistinguible de un bucket recien creado, y
- * el boton de adjuntar aparecia igual para luego fallar al subir.
+ * Se usa `getBucket` porque es la unica que distingue los dos casos:
  *
- * Solo un "bucket not found" lo da por ausente. Cualquier otro error se trata
- * como disponible a proposito: leer los metadatos del bucket puede estar
- * restringido segun las politicas de Storage, y esconder la funcion porque no
- * se pudo consultar la ficha —cuando el bucket existe y la subida funcionaria—
- * seria peor que dejar el boton.
+ *  - `list()` sobre un bucket que no existe devuelve una lista VACIA sin error
+ *    ninguno, identica a la de un bucket recien creado.
+ *  - `createSignedUrl` responde "Object not found" tanto si falta el objeto
+ *    como si falta el bucket entero.
+ *
+ * Y `getBucket` solo sirve gracias a la politica `recibos_bucket_visible` de
+ * la migracion 006: `storage.buckets` tiene RLS, y sin permiso de lectura
+ * devuelve 404 "Bucket not found" aunque el bucket exista.
+ *
+ * Solo un "not found" lo da por ausente. Cualquier otro error se trata como
+ * disponible a proposito: es preferible dejar el boton y que la subida falle
+ * con un mensaje claro, a esconder la funcion por un error de red pasajero.
  */
 export const recibosDisponibles = async (): Promise<boolean> => {
   const { error } = await supabase.storage.getBucket(BUCKET);
