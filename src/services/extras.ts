@@ -65,6 +65,21 @@ export const fetchBudgets = async (): Promise<ResultadoOpcional<Budget[]>> => {
   };
 };
 
+/**
+ * Guarda el tope de una categoria, creandolo o actualizandolo.
+ *
+ * No usa `upsert()` a proposito. El indice unico de `budgets` es sobre una
+ * EXPRESION —`(user_id, lower(trim(categoria)))`, para que "Salidas" y "salidas"
+ * sean el mismo presupuesto— y PostgREST solo sabe pedir `ON CONFLICT` sobre
+ * nombres de columna. Postgres exige que la inferencia calce exactamente con un
+ * indice, asi que `on_conflict=user_id,categoria` fallaba siempre con 42P10
+ * ("no unique or exclusion constraint matching the ON CONFLICT specification")
+ * y el formulario solo decia "No se pudo guardar el presupuesto".
+ *
+ * Se busca primero y se decide insertar o actualizar. Si dos pestanas guardan la
+ * misma categoria a la vez, la que pierde recibe 23505 y se reintenta como
+ * actualizacion, que es el resultado que el usuario esperaba de todos modos.
+ */
 export const upsertBudget = async (categoria: string, amount: number): Promise<Budget> => {
   const userId = await requireUserId();
   const nombre = categoria.trim();
@@ -72,16 +87,57 @@ export const upsertBudget = async (categoria: string, amount: number): Promise<B
   if (!nombre) throw new Error('La categoría es obligatoria');
   if (!(amount > 0)) throw new Error('El monto debe ser mayor que cero');
 
-  const { data, error } = await supabase
-    .from('budgets')
-    .upsert({ user_id: userId, categoria: nombre, amount }, { onConflict: 'user_id,categoria' })
-    .select('id, categoria, amount')
-    .single();
+  const clave = nombre.toLowerCase();
 
-  if (error) {
+  /** El mismo criterio del indice unico, resuelto en JS: la lista es diminuta. */
+  const buscarExistente = async (): Promise<string | null> => {
+    const { data, error } = await supabase
+      .from('budgets')
+      .select('id, categoria')
+      .eq('user_id', userId);
+
+    if (error) {
+      if (esTablaInexistente(error)) throw new Error(MENSAJE_MIGRACION_PENDIENTE);
+      console.error('Error reading budgets:', error);
+      throw new Error(`No se pudo guardar el presupuesto: ${error.message}`);
+    }
+
+    const previo = (data ?? []).find(
+      row => String(row.categoria).trim().toLowerCase() === clave
+    );
+    return (previo?.id as string) ?? null;
+  };
+
+  const guardar = async (id: string | null) =>
+    id
+      ? await supabase
+          .from('budgets')
+          .update({ categoria: nombre, amount })
+          .eq('id', id)
+          .eq('user_id', userId)
+          .select('id, categoria, amount')
+          .single()
+      : await supabase
+          .from('budgets')
+          .insert({ user_id: userId, categoria: nombre, amount })
+          .select('id, categoria, amount')
+          .single();
+
+  let existente = await buscarExistente();
+  let { data, error } = await guardar(existente);
+
+  // Alguien se adelanto entre la lectura y el insert: ahora si existe.
+  if (error?.code === '23505' && !existente) {
+    existente = await buscarExistente();
+    if (existente) ({ data, error } = await guardar(existente));
+  }
+
+  if (error || !data) {
     if (esTablaInexistente(error)) throw new Error(MENSAJE_MIGRACION_PENDIENTE);
     console.error('Error saving budget:', error);
-    throw new Error('No se pudo guardar el presupuesto');
+    throw new Error(
+      error ? `No se pudo guardar el presupuesto: ${error.message}` : 'No se pudo guardar el presupuesto'
+    );
   }
 
   return { id: data.id as string, categoria: data.categoria as string, amount: Number(data.amount) };

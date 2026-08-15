@@ -201,6 +201,58 @@ button:disabled {
   color: var(--text-primary);
 }
 
+/* ── Actualizar (Inicio y Transacciones) ──
+   Alineado a la derecha y en tono apagado: es una accion de mantenimiento, no
+   compite con "Nuevo movimiento". */
+.view-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+
+.view-actions__stamp {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.refresh-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.refresh-action:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-muted);
+}
+
+.refresh-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.refresh-action.is-loading svg {
+  animation: spin 0.9s linear infinite;
+}
+
+/* Un icono girando en bucle es justo lo que molesta a quien pidio menos
+   movimiento en el sistema; el texto ya dice que esta trabajando. */
+@media (prefers-reduced-motion: reduce) {
+  .refresh-action.is-loading svg {
+    animation: none;
+  }
+}
+
 .card {
   background: linear-gradient(180deg, rgba(22, 27, 34, 0.96), rgba(16, 21, 28, 0.96));
   border: 1px solid var(--border-color);

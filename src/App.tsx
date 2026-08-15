@@ -21,6 +21,7 @@ import AccountMenu from './components/AccountMenu';
 import DeudasPanel from './components/DeudasPanel';
 import DeudaModal from './components/DeudaModal';
 import type { AbonoInput, NuevaDeudaInput } from './components/DeudaModal';
+import RefreshButton from './components/RefreshButton';
 
 // recharts pesa mas que todo el resto de la app junta. Cargarlo aparte deja que
 // las vistas de transacciones y configuracion no lo descarguen nunca.
@@ -137,6 +138,14 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Refresco a peticion del usuario. Va aparte de `loading` porque ese levanta
+   * la pantalla completa de "Cargando tus finanzas...": correcto al arrancar,
+   * insufrible cada vez que tocas "Actualizar".
+   */
+  const [refrescando, setRefrescando] = useState(false);
+  const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null);
+
   /* ── Estado de conexion y cola de pendientes ── */
   const [enLinea, setEnLinea] = useState(estaEnLinea);
   const [porSincronizar, setPorSincronizar] = useState(0);
@@ -222,9 +231,16 @@ const App: React.FC = () => {
   // nueva en cada refresco de token (cada hora), y eso recargaria toda la app.
   const userId = session?.user.id ?? null;
 
-  const loadAppData = useCallback(async () => {
+  /**
+   * `silencioso` distingue "el usuario pidio actualizar" de "la app esta
+   * arrancando". El trabajo es el mismo; lo que cambia es que en el primer caso
+   * la pantalla no se vacia y al terminar se confirma con un aviso, porque el
+   * usuario hizo algo y espera respuesta.
+   */
+  const loadAppData = useCallback(async (silencioso = false) => {
     if (!userId) return;
-    setLoading(true);
+    if (silencioso) setRefrescando(true);
+    else setLoading(true);
 
     /**
      * Primero se sube lo que quedo escrito sin senal, DESPUES se lee.
@@ -319,6 +335,7 @@ const App: React.FC = () => {
       setData(movimientos);
       setError(null);
       setDesdeCache(false);
+      setUltimaActualizacion(new Date());
 
       // Copia local para poder abrir la app sin señal. Se guarda despues de
       // materializar los recurrentes para que la foto sea la definitiva.
@@ -344,6 +361,11 @@ const App: React.FC = () => {
           `${descartadas} movimiento(s) guardados sin conexión fueron rechazados al subirlos y se descartaron`
         );
       }
+      // Sin este aviso, actualizar cuando no ha cambiado nada no se distingue de
+      // que el boton no haya funcionado.
+      if (silencioso && sincronizadas === 0 && descartadas === 0) {
+        toast.success('Datos actualizados');
+      }
     } catch (err) {
       /**
        * Si no se pudo leer del servidor se muestra la ultima copia local en vez
@@ -365,11 +387,17 @@ const App: React.FC = () => {
       } else {
         setError(errorMessage(err, 'No se pudo cargar la información'));
       }
+      if (silencioso) toast.error(errorMessage(err, 'No se pudo actualizar'));
     } finally {
       setLoading(false);
+      setRefrescando(false);
       setPorSincronizar(await contarPendientesDeSincronizar());
     }
   }, [toast, userId]);
+
+  const refrescarDatos = useCallback(() => {
+    void loadAppData(true);
+  }, [loadAppData]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -853,6 +881,17 @@ const App: React.FC = () => {
     />
   );
 
+  // El mismo boton en Inicio y en Transacciones: son las dos vistas que miran
+  // datos que pueden haber cambiado desde otro dispositivo.
+  const botonActualizar = (
+    <RefreshButton
+      onClick={refrescarDatos}
+      refrescando={refrescando}
+      ultimaActualizacion={ultimaActualizacion}
+      enLinea={enLinea}
+    />
+  );
+
   /**
    * El dashboard va de "ahora" a "historia", en ese orden.
    *
@@ -865,6 +904,8 @@ const App: React.FC = () => {
    */
   const dashboard = (
     <>
+      {botonActualizar}
+
       {hayCuentas && <SaldoHero saldos={saldos} total={total} sinCuenta={sinCuenta} />}
 
       <MesEnCurso disponible={disponible} proyeccion={proyeccion} />
@@ -981,14 +1022,14 @@ const App: React.FC = () => {
         enLinea={enLinea}
         porSincronizar={porSincronizar}
         desdeCache={desdeCache}
-        onReintentar={loadAppData}
+        onReintentar={refrescarDatos}
       />
 
       {error && (
         <div className="error-banner">
           <AlertCircle size={18} />
           <span>{error}</span>
-          <button onClick={loadAppData} className="error-banner__action">
+          <button onClick={() => loadAppData()} className="error-banner__action">
             Reintentar
           </button>
         </div>
@@ -1000,6 +1041,7 @@ const App: React.FC = () => {
           path="/transacciones"
           element={
             <>
+              {botonActualizar}
               <PeriodSelector
                 value={filters.period}
                 onChange={period => setFilters(prev => ({ ...prev, period }))}
