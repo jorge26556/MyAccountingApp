@@ -39,14 +39,16 @@ export interface ResultadoCuentas {
   datos: Account[];
 }
 
+/** La cuenta que se le crea sola a quien entra por primera vez. */
+const CUENTA_POR_DEFECTO = { nombre: 'Principal', tipo: 'Banco', saldo_inicial: 0, orden: 0 };
+
 export const fetchAccounts = async (): Promise<ResultadoCuentas> => {
   const userId = await requireUserId();
 
-  const { data, error } = await supabase
-    .from('accounts')
-    .select('*')
-    .eq('user_id', userId)
-    .order('orden', { ascending: true });
+  const leer = async () =>
+    supabase.from('accounts').select('*').eq('user_id', userId).order('orden', { ascending: true });
+
+  const { data, error } = await leer();
 
   if (error) {
     if (esTablaInexistente(error)) return { disponible: false, datos: [] };
@@ -54,7 +56,33 @@ export const fetchAccounts = async (): Promise<ResultadoCuentas> => {
     throw new Error('No se pudieron cargar las cuentas');
   }
 
-  return { disponible: true, datos: (data ?? []).map(mapAccount) };
+  if (data && data.length > 0) {
+    return { disponible: true, datos: data.map(mapAccount) };
+  }
+
+  /**
+   * Usuario nuevo: se siembra una cuenta igual que se siembran las categorias.
+   *
+   * Sin esto quedaba en un callejon sin salida: el formulario exige cuenta,
+   * asi que lo primero que veia al registrarse era "Crea al menos una cuenta
+   * en Configuración" y no podia anotar nada hasta ir a buscarla.
+   *
+   * El backfill de la migracion 003 solo cubrio a quienes YA tenian
+   * movimientos; los que llegan despues pasan por aqui.
+   */
+  const { error: seedError } = await supabase
+    .from('accounts')
+    .insert({ user_id: userId, ...CUENTA_POR_DEFECTO });
+
+  // 23505 = otra pestaña (o el doble montaje de StrictMode) gano la carrera y
+  // ya la creo. No es un error: se vuelve a leer y listo.
+  if (seedError && seedError.code !== '23505') {
+    console.error('Error creando la cuenta inicial:', seedError);
+    throw new Error('No se pudo crear la cuenta inicial');
+  }
+
+  const { data: sembradas } = await leer();
+  return { disponible: true, datos: (sembradas ?? []).map(mapAccount) };
 };
 
 export const createAccount = async (input: {
@@ -197,6 +225,9 @@ const mapTransaction = (row: Record<string, unknown>): Transaction => ({
   descripcion: (row.descripcion as string) ?? '',
   account_id: (row.account_id as string) ?? null,
   transfer_group: (row.transfer_group as string) ?? null,
+  compra_id: (row.compra_id as string) ?? null,
+  cuota_numero: (row.cuota_numero as number) ?? null,
+  cuota_total: (row.cuota_total as number) ?? null,
 });
 
 /**

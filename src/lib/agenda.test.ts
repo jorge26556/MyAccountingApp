@@ -18,6 +18,9 @@ const tx = (fecha: string, over: Partial<Transaction> = {}): Transaction => {
     descripcion: '',
     account_id: 'cta-1',
     transfer_group: null,
+    compra_id: null,
+    cuota_numero: null,
+    cuota_total: null,
     ...over,
   };
 };

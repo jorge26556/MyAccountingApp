@@ -279,6 +279,9 @@ export const generarRecurrentesPendientes = async (
       descripcion: data.descripcion ?? '',
       account_id: data.account_id,
       transfer_group: data.transfer_group,
+      compra_id: data.compra_id ?? null,
+      cuota_numero: data.cuota_numero ?? null,
+      cuota_total: data.cuota_total ?? null,
     });
   }
 

@@ -335,11 +335,71 @@
   padding: 1.1rem;
 }
 
+/* ─────────────── Estado de conexion y sincronizacion ────────────────────── */
+
+.sync-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  border-radius: 10px;
+  background: rgba(88, 166, 255, 0.08);
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.sync-banner.is-offline {
+  border-color: rgba(210, 153, 34, 0.4);
+  background: rgba(210, 153, 34, 0.08);
+}
+
+.sync-banner__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent-primary);
+}
+
+.sync-banner.is-offline .sync-banner__icon {
+  color: var(--warning);
+}
+
+.sync-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sync-banner__text strong {
+  color: var(--text-primary);
+}
+
+.sync-banner__action {
+  flex-shrink: 0;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sync-banner__action:hover {
+  color: var(--text-primary);
+  border-color: var(--border-muted);
+  transform: none;
+}
+
 /* ──────────────── Selector de tipo dentro del modal ─────────────────────── */
 
+/* auto-fit y no un numero fijo de columnas: con la migracion de cuotas
+   aplicada son cuatro modos, y sin ella tres. */
 .modal-modes {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 0.5rem;
 }
 
@@ -361,14 +421,122 @@
   transform: none;
 }
 
-@media (max-width: 400px) {
-  /* "Entre cuentas" no cabe junto a los otros dos con el icono al lado. */
+@media (max-width: 460px) {
+  /* "Entre cuentas" no cabe junto a los otros con el icono al lado. */
   .modal-mode {
     flex-direction: column;
     gap: 0.2rem;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     padding: 0.6rem 0.25rem;
   }
+}
+
+/* ──────────── Registro rapido: plantillas, chips e importe ──────────────── */
+
+.modal-plantillas {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.modal-plantillas__titulo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.modal-plantillas__lista {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.45rem;
+}
+
+.modal-plantilla {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.modal-plantilla:hover {
+  border-color: var(--accent-primary);
+  transform: none;
+}
+
+.modal-plantilla strong {
+  font-size: 0.86rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-plantilla span {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* El importe es el unico dato que siempre hay que teclear: se le da el tamano
+   que le corresponde y teclado numerico en el celular. */
+.modal-importe {
+  width: 100%;
+  padding: 0.7rem 0.85rem;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  outline: none;
+  color-scheme: dark;
+}
+
+.modal-importe:focus {
+  border-color: var(--accent-primary);
+}
+
+.modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.modal-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  border-radius: 10px;
+  background: rgba(249, 115, 22, 0.07);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.modal-preview strong {
+  font-size: 0.95rem;
+  color: var(--text-primary);
 }
 
 /* ───────────────────── Movimientos: tabla y tarjetas ────────────────────── */
@@ -539,12 +707,29 @@
   color: var(--text-muted);
 }
 
+/* auto-fit: una transferencia solo muestra "Eliminar", y con tres columnas
+   fijas quedaba un boton estrecho al lado de dos huecos. */
 .tx-card__actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
   gap: 0.4rem;
   border-top: 1px solid var(--border-color);
   padding-top: 0.65rem;
+}
+
+.tx-card__nota {
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.tx-table__nota {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .tx-card__actions button {

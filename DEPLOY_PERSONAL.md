@@ -26,15 +26,32 @@ Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 
 ## Estado de las migraciones
 
-Las tres están aplicadas en producción:
-
-| Archivo | Contiene |
-|---|---|
-| `supabase/schema.sql` | Tablas base, RLS, trigger de perfiles, constraints e índices |
-| `supabase/002_presupuestos_recurrentes_cuenta.sql` | `budgets`, `recurring_transactions` y `delete_own_account()` |
-| `supabase/003_cuentas_saldos.sql` | `accounts`, `transactions.account_id`, `transfer_group` y el backfill |
+| Archivo | Contiene | Estado |
+|---|---|---|
+| `supabase/schema.sql` | Tablas base, RLS, trigger de perfiles, constraints e índices | Aplicada |
+| `supabase/002_presupuestos_recurrentes_cuenta.sql` | `budgets`, `recurring_transactions` y `delete_own_account()` | Aplicada |
+| `supabase/003_cuentas_saldos.sql` | `accounts`, `transactions.account_id`, `transfer_group` y el backfill | Aplicada |
+| `supabase/004_cuotas.sql` | `compra_id`, `cuota_numero` y `cuota_total` en `transactions` | **Pendiente** |
 
 Para reconstruir la base desde cero, córrelas en ese orden.
+
+### La 004 está pendiente
+
+**Hay que ejecutarla a mano** en Supabase → SQL Editor. Mientras no se corra, la
+app funciona igual pero el modo **"A cuotas"** no aparece en el formulario de
+movimientos: no es un error, es la degradación a propósito.
+
+La app deduce si las columnas existen mirando los datos que ya descarga, sin
+pedir nada extra. En cuanto ejecutes la migración y recargues, la opción sale
+sola.
+
+Para comprobarlo:
+
+```sql
+select column_name from information_schema.columns
+ where table_schema = 'public' and table_name = 'transactions'
+   and column_name in ('compra_id', 'cuota_numero', 'cuota_total');
+```
 
 ### Sobre la 003
 
@@ -120,6 +137,24 @@ select transfer_group, count(*) as patas
  where transfer_group is not null
  group by transfer_group having count(*) <> 2;
 ```
+
+## Datos que la app guarda en el dispositivo
+
+Desde que funciona sin conexión hay dos cosas en IndexedDB
+(`mycontabilidad-offline`), separadas por usuario:
+
+| Almacén | Qué guarda | Al cerrar sesión |
+|---|---|---|
+| `snapshot` | Copia de los últimos datos cargados, para abrir la app sin señal | **Se borra** |
+| `cola` | Movimientos escritos sin conexión que aún no han subido | Se conserva |
+
+La cola se conserva a propósito: son movimientos que el usuario escribió y que
+no existen en ningún otro lado. Borrarlos al cerrar sesión sería perderle datos
+propios. En la práctica se vacía sola, porque al cerrar sesión con señal la
+sincronización ya ocurrió.
+
+El service worker sigue con la prohibición de cachear respuestas de Supabase.
+La diferencia es que el ciclo de vida de IndexedDB sí lo controla la app.
 
 El linter de Supabase marca `delete_own_account` como ejecutable por usuarios
 autenticados. **Es intencional**: para darse de baja hay que poder invocarla.

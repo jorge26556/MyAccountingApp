@@ -413,6 +413,19 @@ button:disabled {
   font-weight: 600;
 }
 
+.badge-cuota {
+  background-color: rgba(188, 140, 255, 0.15);
+  color: #bc8cff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Sin subir": el movimiento existe solo en este telefono. Se marca para que
+   nadie lo de por guardado en el servidor. */
+.badge-local {
+  background-color: rgba(210, 153, 34, 0.15);
+  color: var(--warning);
+}
+
 .app-footer {
   margin-top: 4rem;
   text-align: center;
@@ -591,6 +604,26 @@ button:disabled {
   flex: 1;
   color: var(--text-primary);
   line-height: 1.4;
+}
+
+/* El boton de "Deshacer". Va antes de la X y con mas peso visual: si hay que
+   buscarlo, la ventana de arrepentimiento se pasa mientras lo buscas. */
+.toast__action {
+  flex-shrink: 0;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border-muted);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toast__action:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
 }
 
 .toast__close {

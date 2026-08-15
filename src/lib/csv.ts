@@ -206,6 +206,13 @@ export const parseCsv = (contenido: string, accounts: Account[] = []): CsvParseR
       account_id: idPorNombre.get(nombreCuenta) ?? cuentaPorDefecto,
       descripcion: get('descripcion'),
       transfer_group: get('transferencia') || null,
+      // El CSV no lleva las columnas de cuotas: la importacion masiva usa la
+      // ruta normal de insercion, que no las manda para no romperse si la
+      // migracion 004 aun no corrio. La numeracion sigue legible en la
+      // descripcion, que es "Nevera (3/12)".
+      compra_id: null,
+      cuota_numero: null,
+      cuota_total: null,
     });
   });
 

@@ -55,6 +55,15 @@ export interface Transaction {
    * saldos SI las cuentan, porque el dinero de verdad cambio de bolsillo.
    */
   transfer_group: string | null;
+  /**
+   * Las N cuotas de una misma compra diferida comparten este id.
+   *
+   * Cada cuota es un movimiento normal, asi que entra sola en la agenda y en el
+   * comprometido del mes que le toca. Van las tres columnas o ninguna.
+   */
+  compra_id: string | null;
+  cuota_numero: number | null;
+  cuota_total: number | null;
 }
 
 export interface Category {

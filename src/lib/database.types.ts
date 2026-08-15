@@ -195,7 +195,15 @@ export type Database = {
           account_id: string | null;
           canal: string | null;
           categoria: string;
+          /**
+           * Las tres columnas de cuotas vienen de la migracion 004. Si aun no
+           * se ejecuto, PostgREST no las devuelve y llegan `undefined`; por eso
+           * todo lector las normaliza con `?? null`.
+           */
+          compra_id?: string | null;
           created_at: string | null;
+          cuota_numero?: number | null;
+          cuota_total?: number | null;
           descripcion: string | null;
           estado_pago: string;
           fecha: string;

@@ -19,6 +19,9 @@ const tx = (over: Partial<Transaction> = {}): Transaction => ({
   descripcion: 'Compra semanal',
   account_id: 'cta-nequi',
   transfer_group: null,
+  compra_id: null,
+  cuota_numero: null,
+  cuota_total: null,
   ...over,
 });
 

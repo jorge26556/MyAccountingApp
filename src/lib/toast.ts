@@ -7,10 +7,20 @@ import { createContext, useContext } from 'react';
  * estado de la pantalla.
  */
 
+/**
+ * Un boton dentro del aviso. Existe sobre todo para "Deshacer": un borrado
+ * accidental no tenia vuelta atras, y confirmar cada borrado con un dialogo
+ * estorba en el caso normal, que es acertar.
+ */
+export interface ToastAccion {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastApi {
-  success: (message: string) => void;
-  error: (message: string) => void;
-  info: (message: string) => void;
+  success: (message: string, accion?: ToastAccion) => void;
+  error: (message: string, accion?: ToastAccion) => void;
+  info: (message: string, accion?: ToastAccion) => void;
 }
 
 export const ToastContext = createContext<ToastApi | null>(null);

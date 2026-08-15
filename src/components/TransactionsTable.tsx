@@ -4,6 +4,7 @@ import { es } from 'date-fns/locale';
 import { ArrowLeftRight, ChevronLeft, ChevronRight, ChevronsUpDown, Copy, Pencil, Trash2 } from 'lucide-react';
 import type { Account, Transaction } from '../types';
 import { esTransferencia } from '../lib/accounts';
+import { esIdLocal } from '../lib/offline';
 import { formatCurrency } from '../lib/format';
 import { useIsMobile } from '../lib/useMediaQuery';
 
@@ -11,7 +12,8 @@ interface TransactionsTableProps {
   transactions: Transaction[];
   accounts: Account[];
   onEdit: (transaction: Transaction) => void;
-  onDelete: (transaction: Transaction) => void;
+  /** `compraCompleta` borra las N cuotas de la compra, no solo esta. */
+  onDelete: (transaction: Transaction, compraCompleta?: boolean) => void;
   onRepeat: (transaction: Transaction) => void;
 }
 
@@ -99,8 +101,8 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
         ¿Eliminar {formatCurrency(Math.abs(item.importe))} de {item.categoria}?
         {/* Borrar una sola pata dejaria una cuenta con plata que salio y la
             otra sin la que entro: los dos saldos quedarian mal. */}
-        {esTransferencia(item) && ' Se eliminan las dos patas de la transferencia.'} No se puede
-        deshacer.
+        {esTransferencia(item) && ' Se eliminan las dos patas de la transferencia.'}
+        {item.compra_id && ` Es la cuota ${item.cuota_numero} de ${item.cuota_total}.`}
       </span>
       <div className="tx-confirm__actions">
         <button
@@ -111,8 +113,20 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
             onDelete(item);
           }}
         >
-          Sí, eliminar
+          {item.compra_id ? 'Solo esta cuota' : 'Sí, eliminar'}
         </button>
+        {item.compra_id && (
+          <button
+            type="button"
+            className="tx-confirm__yes"
+            onClick={() => {
+              setDeletingId(null);
+              onDelete(item, true);
+            }}
+          >
+            Las {item.cuota_total} cuotas
+          </button>
+        )}
         <button type="button" className="tx-confirm__no" onClick={() => setDeletingId(null)}>
           Cancelar
         </button>
@@ -157,6 +171,9 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
           const esGasto = item.tipo === 'Gasto';
           const enBorrado = activeDeleteId === item.id;
           const transferencia = esTransferencia(item);
+          // Todavia no existe en el servidor: no se puede editar ni borrar
+          // alla. Se sube solo en cuanto haya señal.
+          const sinSubir = esIdLocal(item.id);
 
           return (
             <article key={item.id} className={`card tx-card ${enBorrado ? 'is-deleting' : ''}`}>
@@ -180,11 +197,22 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                 <span>{format(item.fecha, 'dd MMM yyyy', { locale: es })}</span>
                 <span>·</span>
                 <span>{nombreCuenta(item)}</span>
+                {item.cuota_total && (
+                  <span className="badge badge-cuota">
+                    {item.cuota_numero}/{item.cuota_total}
+                  </span>
+                )}
                 {item.estado_pago === 'Pendiente' && <span className="badge badge-pending">Pendiente</span>}
+                {sinSubir && <span className="badge badge-local">Sin subir</span>}
               </div>
 
               {enBorrado ? (
                 confirmacionBorrado(item)
+              ) : sinSubir ? (
+                <p className="tx-card__nota">
+                  Guardado en el teléfono. Se subirá solo cuando vuelva la señal; entonces podrás
+                  editarlo o borrarlo.
+                </p>
               ) : (
                 <div className="tx-card__actions">
                   {/* Editar o repetir una sola pata descuadraria el par. */}
@@ -243,6 +271,7 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
               const esGasto = item.tipo === 'Gasto';
               const enBorrado = activeDeleteId === item.id;
               const transferencia = esTransferencia(item);
+              const sinSubir = esIdLocal(item.id);
 
               return (
                 <React.Fragment key={item.id}>
@@ -270,13 +299,14 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                       <span className={`badge ${item.estado_pago === 'Pagado' ? 'badge-paid' : 'badge-pending'}`}>
                         {item.estado_pago}
                       </span>
+                      {sinSubir && <span className="badge badge-local">Sin subir</span>}
                     </td>
                     <td className="tx-table__desc" title={item.descripcion}>
                       {item.descripcion || '—'}
                     </td>
                     <td>
                       <div className="tx-table__actions">
-                        {!transferencia && (
+                        {!transferencia && !sinSubir && (
                           <>
                             <button
                               type="button"
@@ -299,15 +329,24 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                             </button>
                           </>
                         )}
-                        <button
-                          type="button"
-                          className="is-danger"
-                          title={enBorrado ? 'Cancelar' : 'Eliminar'}
-                          aria-label={`Eliminar movimiento de ${item.categoria}`}
-                          onClick={() => setDeletingId(enBorrado ? null : item.id)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        {sinSubir ? (
+                          <span
+                            className="tx-table__nota"
+                            title="Se subirá solo cuando vuelva la señal"
+                          >
+                            en cola
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="is-danger"
+                            title={enBorrado ? 'Cancelar' : 'Eliminar'}
+                            aria-label={`Eliminar movimiento de ${item.categoria}`}
+                            onClick={() => setDeletingId(enBorrado ? null : item.id)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

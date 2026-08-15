@@ -23,6 +23,9 @@ const tx = (fecha: string, importe: number, over: Partial<Transaction> = {}): Tr
     descripcion: '',
     account_id: 'cuenta-1',
     transfer_group: null,
+    compra_id: null,
+    cuota_numero: null,
+    cuota_total: null,
     ...over,
   };
 };

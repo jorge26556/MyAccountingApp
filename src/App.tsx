@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import type { Session } from '@supabase/supabase-js';
 import { AlertCircle, Plus, TrendingDown, TrendingUp } from 'lucide-react';
@@ -9,7 +9,8 @@ import PeriodSelector from './components/PeriodSelector';
 import SettingsPanel from './components/SettingsPanel';
 import TopNav from './components/TopNav';
 import TransactionModal from './components/TransactionModal';
-import type { TransferInput } from './components/TransactionModal';
+import type { CompraInput, TransferInput } from './components/TransactionModal';
+import SyncBanner from './components/SyncBanner';
 import TransactionsTable from './components/TransactionsTable';
 import GoalsPanel from './components/GoalsPanel';
 import MesEnCurso from './components/MesEnCurso';
@@ -41,6 +42,7 @@ import { formatCurrency, formatPercent } from './lib/format';
 import { downloadCsv } from './lib/csv';
 import { toDateString, today } from './lib/dates';
 import {
+  contarPendientesDeSincronizar,
   createCategory,
   createSavingsGoal,
   createTransaction,
@@ -51,9 +53,13 @@ import {
   fetchCategories,
   fetchSavingsGoals,
   fetchTransactions,
+  hayColumnasDeCuotas,
+  sincronizarPendientes,
   updateSavingsGoal,
   updateTransaction,
 } from './services/api';
+import { createCompraACuotas, cuotasDisponibles, deleteCompra } from './services/cuotas';
+import { borrarSnapshots, estaEnLinea, guardarSnapshot, leerSnapshot } from './lib/offline';
 import {
   createAccount,
   createTransfer,
@@ -105,9 +111,24 @@ const App: React.FC = () => {
   const [recurrentes, setRecurrentes] = useState<RecurringTransaction[]>([]);
   const [recurrentesDisponibles, setRecurrentesDisponibles] = useState(false);
   const [cuentas, setCuentas] = useState<Account[]>([]);
-  const [cuentasDisponibles, setCuentasDisponibles] = useState(false);
+  const [hayCuentas, setHayCuentas] = useState(false);
+  const [hayCuotas, setHayCuotas] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  /* ── Estado de conexion y cola de pendientes ── */
+  const [enLinea, setEnLinea] = useState(estaEnLinea);
+  const [porSincronizar, setPorSincronizar] = useState(0);
+  const [desdeCache, setDesdeCache] = useState(false);
+
+  /**
+   * Borrados en marcha, esperando la ventana de "Deshacer".
+   *
+   * Se guardan en un ref y no en estado: cambiarlos no debe re-renderizar nada,
+   * y si el componente se re-renderiza entre medias el temporizador tiene que
+   * seguir siendo el mismo.
+   */
+  const borradosEnEspera = useRef(new Map<string, number>());
 
   /**
    * `repeat` copia los datos de un movimiento existente pero crea uno nuevo.
@@ -160,6 +181,11 @@ const App: React.FC = () => {
         setBudgets([]);
         setRecurrentes([]);
         setCuentas([]);
+        // El snapshot sobrevive al cierre de la app a proposito, pero no al
+        // cierre de sesion: son saldos y movimientos en el disco del
+        // dispositivo. La cola SI se conserva —son movimientos que el usuario
+        // escribio y que no existen en ningun otro lado.
+        void borrarSnapshots();
       }
       setSession(nextSession);
       setAuthReady(true);
@@ -170,8 +196,33 @@ const App: React.FC = () => {
 
   /* ──────────────────────────────── datos ─────────────────────────────── */
 
+  // Se depende del id y no del objeto `session`: Supabase emite una sesion
+  // nueva en cada refresco de token (cada hora), y eso recargaria toda la app.
+  const userId = session?.user.id ?? null;
+
   const loadAppData = useCallback(async () => {
+    if (!userId) return;
     setLoading(true);
+
+    /**
+     * Primero se sube lo que quedo escrito sin senal, DESPUES se lee.
+     *
+     * Al reves, la lectura del servidor traeria una lista sin esos movimientos
+     * y pisaria los locales: al usuario le pareceria que se perdieron justo
+     * cuando volvio la conexion.
+     */
+    let sincronizadas = 0;
+    let descartadas = 0;
+    if (estaEnLinea()) {
+      try {
+        const resultado = await sincronizarPendientes();
+        sincronizadas = resultado.creadas.length;
+        descartadas = resultado.descartadas;
+      } catch (err) {
+        console.error('Error sincronizando pendientes:', err);
+      }
+    }
+
     try {
       const [transactions, categoryList, goalsList, budgetList, recurringList, accountList] =
         await Promise.all([
@@ -190,7 +241,18 @@ const App: React.FC = () => {
       setRecurrentes(recurringList.datos);
       setRecurrentesDisponibles(recurringList.disponible);
       setCuentas(accountList.datos);
-      setCuentasDisponibles(accountList.disponible);
+      setHayCuentas(accountList.disponible);
+
+      /**
+       * Las cuotas no son una tabla que exista o no, son tres columnas de
+       * `transactions`. Lo normal es deducirlo de las filas que ya llegaron,
+       * sin pedir nada extra. El sondeo explicito —que cuesta un 400 en la
+       * consola— solo hace falta cuando no hay ni un movimiento del cual
+       * deducirlo, es decir en una cuenta recien creada.
+       */
+      const deducido = hayColumnasDeCuotas();
+      if (deducido === null) void cuotasDisponibles().then(setHayCuotas);
+      else setHayCuotas(deducido);
 
       // Los recurrentes que ya tocan este mes se materializan al abrir la app.
       // Se agregan al estado en vez de recargar: la insercion ya devolvio la
@@ -220,16 +282,58 @@ const App: React.FC = () => {
 
       setData(movimientos);
       setError(null);
+      setDesdeCache(false);
+
+      // Copia local para poder abrir la app sin señal. Se guarda despues de
+      // materializar los recurrentes para que la foto sea la definitiva.
+      void guardarSnapshot({
+        userId,
+        transactions: movimientos,
+        accounts: accountList.datos,
+        categories: categoryList,
+        savingsGoals: goalsList,
+        budgets: budgetList.datos,
+        recurrentes: recurringList.datos,
+      });
+
+      if (sincronizadas > 0) {
+        toast.success(
+          sincronizadas === 1
+            ? 'Se sincronizó 1 movimiento que habías registrado sin conexión'
+            : `Se sincronizaron ${sincronizadas} movimientos registrados sin conexión`
+        );
+      }
+      if (descartadas > 0) {
+        toast.error(
+          `${descartadas} movimiento(s) guardados sin conexión fueron rechazados al subirlos y se descartaron`
+        );
+      }
     } catch (err) {
-      setError(errorMessage(err, 'No se pudo cargar la información'));
+      /**
+       * Si no se pudo leer del servidor se muestra la ultima copia local en vez
+       * de una pantalla de error. Ver tus numeros de ayer es infinitamente mas
+       * util que "No se pudo cargar la información", y el aviso deja claro que
+       * pueden estar desactualizados.
+       */
+      const copia = await leerSnapshot(userId);
+      if (copia) {
+        setData(copia.transactions);
+        setCategories(copia.categories);
+        setSavingsGoals(copia.savingsGoals);
+        setBudgets(copia.budgets);
+        setRecurrentes(copia.recurrentes);
+        setCuentas(copia.accounts);
+        setHayCuentas(copia.accounts.length > 0);
+        setDesdeCache(true);
+        setError(null);
+      } else {
+        setError(errorMessage(err, 'No se pudo cargar la información'));
+      }
     } finally {
       setLoading(false);
+      setPorSincronizar(await contarPendientesDeSincronizar());
     }
-  }, [toast]);
-
-  // Se depende del id y no del objeto `session`: Supabase emite una sesion
-  // nueva en cada refresco de token (cada hora), y eso recargaria toda la app.
-  const userId = session?.user.id ?? null;
+  }, [toast, userId]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -239,6 +343,27 @@ const App: React.FC = () => {
     }
     loadAppData();
   }, [authReady, userId, loadAppData]);
+
+  /**
+   * Al recuperar la señal se sube la cola sola, sin que el usuario tenga que
+   * recargar ni enterarse. El evento `online` del navegador miente a veces
+   * (dice que hay red cuando solo hay wifi sin internet), pero el peor caso es
+   * un intento fallido que deja todo en cola.
+   */
+  useEffect(() => {
+    const alConectar = () => {
+      setEnLinea(true);
+      loadAppData();
+    };
+    const alDesconectar = () => setEnLinea(false);
+
+    window.addEventListener('online', alConectar);
+    window.addEventListener('offline', alDesconectar);
+    return () => {
+      window.removeEventListener('online', alConectar);
+      window.removeEventListener('offline', alDesconectar);
+    };
+  }, [loadAppData]);
 
   /* ─────────────────────────── periodo y filtros ──────────────────────── */
 
@@ -315,36 +440,97 @@ const App: React.FC = () => {
       setData(prev => prev.map(item => (item.id === updated.id ? updated : item)));
       toast.success('Movimiento actualizado');
     } else {
-      const created = await createTransaction(payload);
-      setData(prev => [created, ...prev]);
-      toast.success('Movimiento guardado');
+      const { transaccion, encolada } = await createTransaction(payload);
+      setData(prev => [transaccion, ...prev]);
+
+      if (encolada) {
+        setPorSincronizar(total => total + 1);
+        toast.info('Guardado sin conexión. Se subirá solo cuando vuelva la señal.');
+      } else {
+        toast.success('Movimiento guardado');
+      }
     }
   };
 
+  const ordenarPorFecha = (items: Transaction[]) =>
+    [...items].sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+
+  const SEGUNDOS_PARA_DESHACER = 6000;
+
   /**
-   * Borrar una sola pata de una transferencia dejaria una cuenta con plata que
-   * salio y la otra sin la que entro. Se borran las dos.
+   * Borrar con ventana de arrepentimiento.
+   *
+   * El movimiento desaparece de la pantalla al instante, pero la llamada al
+   * servidor se retrasa unos segundos: si le das a "Deshacer", el borrado
+   * simplemente nunca ocurre. Es mas seguro que borrar y recrear —si el
+   * "recrear" fallara por falta de señal, el dato se perderia de verdad— y
+   * menos molesto que un dialogo de confirmacion en cada borrado acertado.
+   *
+   * Si cierras la app dentro de esa ventana el movimiento sigue ahi al volver.
+   * Es el fallo benigno: no perder nada.
+   *
+   * Las dos patas de una transferencia se borran juntas; borrar una sola
+   * dejaria una cuenta con plata que salio y la otra sin la que entro.
    */
-  const handleDeleteTransaction = async (tx: Transaction) => {
-    const snapshot = data;
+  const handleDeleteTransaction = (tx: Transaction, compraCompleta = false) => {
     const grupo = tx.transfer_group;
+    const compra = compraCompleta ? tx.compra_id : null;
 
-    setData(prev =>
-      prev.filter(item => (grupo ? item.transfer_group !== grupo : item.id !== tx.id))
+    const afectadas = data.filter(item =>
+      compra
+        ? item.compra_id === compra
+        : grupo
+          ? item.transfer_group === grupo
+          : item.id === tx.id
     );
+    if (afectadas.length === 0) return;
 
-    try {
-      if (grupo) {
-        await deleteTransfer(grupo);
-        toast.success('Transferencia eliminada');
-      } else {
-        await deleteTransaction(tx.id);
-        toast.success('Transacción eliminada');
+    const ids = new Set(afectadas.map(item => item.id));
+    setData(prev => prev.filter(item => !ids.has(item.id)));
+
+    const temporizador = window.setTimeout(async () => {
+      borradosEnEspera.current.delete(tx.id);
+      try {
+        if (compra) await deleteCompra(compra);
+        else if (grupo) await deleteTransfer(grupo);
+        else await deleteTransaction(tx.id);
+      } catch (err) {
+        setData(prev => ordenarPorFecha([...prev, ...afectadas]));
+        toast.error(errorMessage(err, 'No se pudo eliminar la transacción'));
       }
-    } catch (err) {
-      setData(snapshot); // revertir
-      toast.error(errorMessage(err, 'No se pudo eliminar la transacción'));
-    }
+    }, SEGUNDOS_PARA_DESHACER);
+
+    borradosEnEspera.current.set(tx.id, temporizador);
+
+    const mensaje = compra
+      ? `Compra de ${afectadas.length} cuotas eliminada`
+      : grupo
+        ? 'Transferencia eliminada'
+        : 'Movimiento eliminado';
+
+    toast.success(mensaje, {
+      label: 'Deshacer',
+      onClick: () => {
+        window.clearTimeout(temporizador);
+        borradosEnEspera.current.delete(tx.id);
+        setData(prev => ordenarPorFecha([...prev, ...afectadas]));
+      },
+    });
+  };
+
+  const handleCompra = async (input: CompraInput) => {
+    const creadas = await createCompraACuotas({
+      total: input.total,
+      cuotas: input.cuotas,
+      primeraFecha: input.primeraFecha,
+      categoria: input.categoria,
+      descripcion: input.descripcion,
+      account_id: input.account_id,
+      primeraPagada: input.primeraPagada,
+    });
+
+    setData(prev => ordenarPorFecha([...creadas, ...prev]));
+    toast.success(`Compra registrada en ${creadas.length} cuotas`);
   };
 
   const handleTransfer = async (input: TransferInput) => {
@@ -548,7 +734,7 @@ const App: React.FC = () => {
    */
   const dashboard = (
     <>
-      {cuentasDisponibles && <SaldoHero saldos={saldos} total={total} sinCuenta={sinCuenta} />}
+      {hayCuentas && <SaldoHero saldos={saldos} total={total} sinCuenta={sinCuenta} />}
 
       <MesEnCurso disponible={disponible} proyeccion={proyeccion} />
 
@@ -650,6 +836,13 @@ const App: React.FC = () => {
 
       <TopNav onAdd={openCreate} />
 
+      <SyncBanner
+        enLinea={enLinea}
+        porSincronizar={porSincronizar}
+        desdeCache={desdeCache}
+        onReintentar={loadAppData}
+      />
+
       {error && (
         <div className="error-banner">
           <AlertCircle size={18} />
@@ -697,7 +890,7 @@ const App: React.FC = () => {
               recurrentesDisponibles={recurrentesDisponibles}
               saldos={saldos}
               cuentas={cuentas}
-              cuentasDisponibles={cuentasDisponibles}
+              cuentasDisponibles={hayCuentas}
               onCreateAccount={handleCreateAccount}
               onUpdateAccount={handleUpdateAccount}
               onDeleteAccount={handleDeleteAccount}
@@ -722,9 +915,12 @@ const App: React.FC = () => {
         <TransactionModal
           categories={categoryNames}
           accounts={cuentas}
+          transactions={data}
+          hayCuotas={hayCuotas}
           onClose={() => setModalState(null)}
           onSave={handleSaveTransaction}
           onTransfer={handleTransfer}
+          onCompra={handleCompra}
           editingTransaction={modalState.mode === 'edit' ? modalState.tx : undefined}
           prefill={modalState.mode === 'repeat' ? modalState.tx : undefined}
         />

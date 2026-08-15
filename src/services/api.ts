@@ -1,5 +1,13 @@
 import { supabase } from '../lib/supabase';
 import { parseLocalDate, toDateString } from '../lib/dates';
+import {
+  encolarCreacion,
+  esFalloDeRed,
+  estaEnLinea,
+  leerCola,
+  nuevoIdLocal,
+  quitarDeCola,
+} from '../lib/offline';
 import type { Tables } from '../lib/database.types';
 import type {
   Category,
@@ -24,7 +32,30 @@ const requireUserId = async (): Promise<string> => {
 
 const normalize = (value: string) => value.trim();
 
-const mapTransaction = (row: Tables<'transactions'>): Transaction => ({
+/**
+ * Si la migracion 004 ya corrio, deducido de los datos que ya llegaron.
+ *
+ * `select('*')` devuelve las columnas que existan: si la migracion corrio, cada
+ * fila trae la clave `compra_id` (aunque valga null) y si no, no la trae. Mirar
+ * eso sale gratis.
+ *
+ * La alternativa era preguntar por la columna con un select aparte, pero
+ * PostgREST responde 400 cuando no existe y el navegador lo pinta en rojo en la
+ * consola en CADA carga de la app. Un error permanente que no significa nada es
+ * justo lo que hace que se dejen de mirar los que si significan algo.
+ *
+ * `null` = todavia no se sabe (no ha llegado ninguna fila).
+ */
+let columnasDeCuotas: boolean | null = null;
+
+export const hayColumnasDeCuotas = (): boolean | null => columnasDeCuotas;
+
+const mapTransaction = (row: Tables<'transactions'>): Transaction => {
+  if (columnasDeCuotas === null) columnasDeCuotas = 'compra_id' in row;
+  return construirTransaccion(row);
+};
+
+const construirTransaccion = (row: Tables<'transactions'>): Transaction => ({
   id: row.id,
   user_id: row.user_id,
   fecha: parseLocalDate(row.fecha),
@@ -35,6 +66,11 @@ const mapTransaction = (row: Tables<'transactions'>): Transaction => ({
   descripcion: row.descripcion ?? '',
   account_id: row.account_id,
   transfer_group: row.transfer_group,
+  // Si la migracion 004 aun no corrio, estas columnas no existen y llegan
+  // `undefined`. Se normalizan a null en vez de reventar.
+  compra_id: row.compra_id ?? null,
+  cuota_numero: row.cuota_numero ?? null,
+  cuota_total: row.cuota_total ?? null,
 });
 
 /* ────────────────────────────── transacciones ────────────────────────────── */
@@ -42,11 +78,21 @@ const mapTransaction = (row: Tables<'transactions'>): Transaction => ({
 export const fetchTransactions = async (): Promise<Transaction[]> => {
   const userId = await requireUserId();
 
+  /**
+   * El desempate por `created_at` no es cosmetico.
+   *
+   * `fecha` es una columna de solo dia, asi que todo lo registrado hoy empata y
+   * Postgres puede devolverlo en cualquier orden. Las plantillas de registro
+   * rapido se quedan con el PRIMERO de cada grupo como "la ultima vez", asi que
+   * sin este segundo criterio proponian un importe u otro segun como cayera la
+   * consulta.
+   */
   const { data, error } = await supabase
     .from('transactions')
     .select('*')
     .eq('user_id', userId)
-    .order('fecha', { ascending: false });
+    .order('fecha', { ascending: false })
+    .order('created_at', { ascending: false });
 
   if (error) {
     console.error('Error fetching transactions:', error);
@@ -56,34 +102,153 @@ export const fetchTransactions = async (): Promise<Transaction[]> => {
   return (data ?? []).map(mapTransaction);
 };
 
+/**
+ * Las columnas de cuotas NO se mandan aqui a proposito.
+ *
+ * Si la migracion 004 todavia no corrio, incluir `compra_id` haria que
+ * PostgREST rechazara CUALQUIER alta con un PGRST204: se romperia el registro
+ * de movimientos entero por una funcion que ni siquiera se esta usando. Las
+ * cuotas se insertan desde services/cuotas.ts, que solo actua cuando comprobo
+ * que las columnas existen.
+ */
+const filaParaInsertar = (userId: string, transaction: Omit<Transaction, 'id' | 'user_id'>) => ({
+  user_id: userId,
+  // toDateString usa componentes locales. Con toISOString() la fecha se
+  // corria un dia en cualquier zona horaria al este de UTC.
+  fecha: toDateString(transaction.fecha),
+  tipo: transaction.tipo,
+  categoria: transaction.categoria,
+  importe: Math.abs(transaction.importe),
+  estado_pago: transaction.estado_pago,
+  descripcion: transaction.descripcion,
+  account_id: transaction.account_id,
+});
+
+/** Un movimiento que aun no existe en el servidor, con id temporal. */
+const comoLocal = (
+  userId: string,
+  transaction: Omit<Transaction, 'id' | 'user_id'>
+): Transaction => ({
+  ...transaction,
+  id: nuevoIdLocal(),
+  user_id: userId,
+  importe: Math.abs(transaction.importe),
+});
+
+export interface ResultadoCreacion {
+  transaccion: Transaction;
+  /** true = quedo en la cola local, todavia no esta en el servidor. */
+  encolada: boolean;
+}
+
+/**
+ * Guarda el movimiento, y si no hay red lo encola para mas tarde.
+ *
+ * Antes, registrar sin senal devolvia un error y lo escrito se perdia. Y ese
+ * es justo el momento en que uno registra: en la fila de la caja, con una raya
+ * de cobertura.
+ *
+ * Solo se encola cuando el fallo es de RED. Un rechazo del servidor —un
+ * importe invalido, una categoria borrada— se propaga como error de siempre:
+ * encolarlo lo dejaria reintentando para siempre.
+ */
 export const createTransaction = async (
   transaction: Omit<Transaction, 'id' | 'user_id'>
-): Promise<Transaction> => {
+): Promise<ResultadoCreacion> => {
   const userId = await requireUserId();
 
-  const { data, error } = await supabase
-    .from('transactions')
-    .insert({
-      user_id: userId,
-      // toDateString usa componentes locales. Con toISOString() la fecha se
-      // corria un dia en cualquier zona horaria al este de UTC.
-      fecha: toDateString(transaction.fecha),
-      tipo: transaction.tipo,
-      categoria: transaction.categoria,
-      importe: Math.abs(transaction.importe),
-      estado_pago: transaction.estado_pago,
-      descripcion: transaction.descripcion,
-      account_id: transaction.account_id,
-    })
-    .select()
-    .single();
+  const encolar = async (): Promise<ResultadoCreacion> => {
+    const guardada = await encolarCreacion(userId, transaction);
+    if (!guardada) {
+      throw new Error(
+        'Sin conexión, y este navegador no permite guardar borradores. Vuelve a intentarlo con señal.'
+      );
+    }
+    return { transaccion: comoLocal(userId, transaction), encolada: true };
+  };
 
-  if (error) {
-    console.error('Error creating transaction:', error);
-    throw new Error('No se pudo guardar la transaccion');
+  // Sin conexion ni se intenta: ahorra el timeout del fetch, que en movil son
+  // varios segundos mirando un boton bloqueado.
+  if (!estaEnLinea()) return encolar();
+
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert(filaParaInsertar(userId, transaction))
+      .select()
+      .single();
+
+    if (error) {
+      if (esFalloDeRed(error)) return encolar();
+      console.error('Error creating transaction:', error);
+      throw new Error('No se pudo guardar la transaccion');
+    }
+
+    return { transaccion: mapTransaction(data), encolada: false };
+  } catch (err) {
+    if (esFalloDeRed(err)) return encolar();
+    throw err;
+  }
+};
+
+export interface ResultadoSincronizacion {
+  creadas: Transaction[];
+  /** Filas que el servidor rechazo: se sacan de la cola para no reintentar. */
+  descartadas: number;
+}
+
+/**
+ * Vacia la cola contra el servidor. Se llama al arrancar y al recuperar la red.
+ *
+ * Se procesa en orden de creacion y de a una: si a mitad de camino se cae la
+ * conexion otra vez, lo ya subido queda subido y lo demas sigue en cola.
+ */
+export const sincronizarPendientes = async (): Promise<ResultadoSincronizacion> => {
+  const userId = await requireUserId();
+  const pendientes = await leerCola(userId);
+
+  const creadas: Transaction[] = [];
+  let descartadas = 0;
+
+  for (const operacion of pendientes) {
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .insert(filaParaInsertar(userId, operacion.payload))
+        .select()
+        .single();
+
+      if (error) {
+        // Se corto otra vez: se deja en cola y se para, no tiene sentido
+        // intentar las siguientes.
+        if (esFalloDeRed(error)) break;
+
+        // El servidor la rechazo por su contenido. Reintentarla eternamente
+        // dejaria un contador de pendientes que nunca baja.
+        console.error('Movimiento pendiente rechazado:', error);
+        await quitarDeCola(operacion.id);
+        descartadas += 1;
+        continue;
+      }
+
+      await quitarDeCola(operacion.id);
+      creadas.push(mapTransaction(data));
+    } catch (err) {
+      if (esFalloDeRed(err)) break;
+      console.error('Error sincronizando pendiente:', err);
+      await quitarDeCola(operacion.id);
+      descartadas += 1;
+    }
   }
 
-  return mapTransaction(data);
+  return { creadas, descartadas };
+};
+
+/** Cuantos movimientos siguen esperando señal. */
+export const contarPendientesDeSincronizar = async (): Promise<number> => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) return 0;
+  return (await leerCola(session.user.id)).length;
 };
 
 export const updateTransaction = async (

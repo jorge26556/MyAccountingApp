@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
-import { ToastContext, type ToastApi } from '../lib/toast';
+import { ToastContext, type ToastAccion, type ToastApi } from '../lib/toast';
 
 /**
  * Reemplaza los `alert()` que habia en SettingsPanel y TransactionModal.
@@ -16,6 +16,7 @@ interface ToastItem {
   id: number;
   kind: ToastKind;
   message: string;
+  accion?: ToastAccion;
 }
 
 const ICONS: Record<ToastKind, React.ReactNode> = {
@@ -34,20 +35,24 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const push = useCallback(
-    (kind: ToastKind, message: string) => {
+    (kind: ToastKind, message: string, accion?: ToastAccion) => {
       const id = ++nextId;
-      setToasts(prev => [...prev, { id, kind, message }]);
-      // Los errores duran mas: suelen requerir leer y actuar.
-      window.setTimeout(() => dismiss(id), kind === 'error' ? 7000 : 4000);
+      setToasts(prev => [...prev, { id, kind, message, accion }]);
+
+      // Los errores duran mas porque hay que leerlos, y los que traen boton
+      // mas todavia: 4 segundos no alcanzan para notar el borrado, decidir que
+      // fue un error y llegar a "Deshacer".
+      const duracion = accion ? 8000 : kind === 'error' ? 7000 : 4000;
+      window.setTimeout(() => dismiss(id), duracion);
     },
     [dismiss]
   );
 
   const api = useMemo<ToastApi>(
     () => ({
-      success: message => push('success', message),
-      error: message => push('error', message),
-      info: message => push('info', message),
+      success: (message, accion) => push('success', message, accion),
+      error: (message, accion) => push('error', message, accion),
+      info: (message, accion) => push('info', message, accion),
     }),
     [push]
   );
@@ -60,6 +65,18 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           <div key={toast.id} className={`toast toast--${toast.kind}`}>
             <span className="toast__icon">{ICONS[toast.kind]}</span>
             <span className="toast__message">{toast.message}</span>
+            {toast.accion && (
+              <button
+                type="button"
+                className="toast__action"
+                onClick={() => {
+                  dismiss(toast.id);
+                  toast.accion!.onClick();
+                }}
+              >
+                {toast.accion.label}
+              </button>
+            )}
             <button
               type="button"
               className="toast__close"
