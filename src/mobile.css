@@ -443,6 +443,30 @@
   background: var(--bg-elevated);
 }
 
+/* El boton se come el padding de la tarjeta para que TODA la franja del titulo
+   sea tactil: 44px de alto, de borde a borde, sin mover nada de sitio. El
+   margen negativo cancela exactamente el relleno, asi que plegado o desplegado
+   se ve igual que antes. Un chevron de 16px es un blanco imposible con el
+   pulgar, y el titulo solo tiene 17px de alto. */
+.modal-plantillas__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  margin: -0.85rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.modal-plantillas__toggle:hover .modal-plantillas__titulo,
+.modal-plantillas__toggle:hover .modal-plantillas__chevron {
+  color: var(--text-secondary);
+}
+
 .modal-plantillas__titulo {
   display: inline-flex;
   align-items: center;
@@ -452,6 +476,31 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* Plegado, el conteo es lo unico que dice si vale la pena abrirlo. */
+.modal-plantillas__conteo {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  font-size: 0.7rem;
+  letter-spacing: 0;
+}
+
+.modal-plantillas__chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.modal-plantillas__chevron.is-abierto {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-plantillas__chevron {
+    transition: none;
+  }
 }
 
 .modal-plantillas__lista {
@@ -513,12 +562,6 @@
 
 .modal-importe:focus {
   border-color: var(--accent-primary);
-}
-
-.modal-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
 }
 
 .modal-preview {

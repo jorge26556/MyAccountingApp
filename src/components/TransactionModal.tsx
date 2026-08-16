@@ -1,7 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { ArrowLeftRight, CreditCard, MinusCircle, PlusCircle, Save, X, Zap } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  ChevronDown,
+  CreditCard,
+  MinusCircle,
+  PlusCircle,
+  Save,
+  X,
+  Zap,
+} from 'lucide-react';
 import type { Account, PaymentStatus, Transaction, TransactionType } from '../types';
 import { toDateString, today } from '../lib/dates';
 import { cuentasActivas } from '../lib/accounts';
@@ -51,9 +60,6 @@ interface TransactionModalProps {
 
 type Modo = TransactionType | 'Transferencia' | 'Cuotas';
 
-/** Cuantas categorias se muestran como chips antes de ofrecer la lista larga. */
-const CHIPS_VISIBLES = 6;
-
 const TransactionModal: React.FC<TransactionModalProps> = ({
   categories,
   accounts,
@@ -80,7 +86,8 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [guardadas, setGuardadas] = useState(0);
   const [modo, setModo] = useState<Modo>((base?.tipo ?? 'Gasto') as Modo);
-  const [verTodasCategorias, setVerTodasCategorias] = useState(false);
+  /** "Lo de siempre" arranca plegado: es un atajo, no el camino principal. */
+  const [plantillasAbiertas, setPlantillasAbiertas] = useState(false);
   /** Si el usuario ya eligio categoria a mano, la sugerencia no la pisa. */
   const [categoriaTocada, setCategoriaTocada] = useState(Boolean(base));
   const [sugerenciaAplicada, setSugerenciaAplicada] = useState(false);
@@ -94,12 +101,16 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
   }, [categories, base?.categoria]);
 
   /**
-   * Las categorias que mas usas primero. Con veinte categorias en orden
-   * alfabetico, "Mercado" queda a mitad de lista aunque sea la de todos los
-   * dias.
+   * Ordenar la lista y elegir el valor por defecto son dos cosas distintas.
+   *
+   * La lista va alfabetica, que es como se busca en un desplegable: sabes la
+   * inicial de lo que quieres y saltas ahi. Pero preseleccionar la primera
+   * alfabetica dejaria "Arriendo" puesto en cada movimiento nuevo solo por
+   * empezar con A, y el gasto del dia a dia saldria mal clasificado. El valor
+   * inicial sigue siendo el que mas usas para este tipo de movimiento.
    */
-  const categoriasOrdenadas = useMemo(
-    () => categoriasPorUso(transactions, selectableCategories, tipoActual),
+  const categoriaPorDefecto = useMemo(
+    () => categoriasPorUso(transactions, selectableCategories, tipoActual)[0] ?? '',
     [transactions, selectableCategories, tipoActual]
   );
 
@@ -108,7 +119,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
 
   const [formData, setFormData] = useState({
     fecha: toDateString(editingTransaction?.fecha ?? today()),
-    categoria: base?.categoria ?? categoriasOrdenadas[0] ?? '',
+    categoria: base?.categoria ?? categoriaPorDefecto,
     importe: base ? String(Math.abs(base.importe)) : '',
     estado_pago: (base?.estado_pago ?? 'Pagado') as PaymentStatus,
     descripcion: base?.descripcion ?? '',
@@ -120,6 +131,24 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
 
   const set = (key: keyof typeof formData, value: string) =>
     setFormData(prev => ({ ...prev, [key]: value }));
+
+  /**
+   * Las opciones del desplegable, en orden alfabetico.
+   *
+   * Se incluye la categoria activa aunque ya no exista en Configuración: una
+   * plantilla del historial puede traer una categoria borrada desde entonces, y
+   * un `<select>` cuyo `value` no esta entre sus `<option>` se pinta vacio
+   * mientras guarda otra cosa. Los chips que habia antes tenian el mismo
+   * cuidado por la misma razon.
+   */
+  const opcionesCategoria = useMemo(() => {
+    const activa = formData.categoria;
+    const todas =
+      activa && !selectableCategories.includes(activa)
+        ? [...selectableCategories, activa]
+        : selectableCategories;
+    return [...todas].sort((a, b) => a.localeCompare(b, 'es'));
+  }, [selectableCategories, formData.categoria]);
 
   // Cerrar con Escape es lo que espera cualquiera frente a un modal.
   useEffect(() => {
@@ -137,7 +166,7 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
   const numeroCuotas = Number(formData.cuotas);
   const cuotasValidas =
     Number.isInteger(numeroCuotas) && numeroCuotas >= MIN_CUOTAS && numeroCuotas <= MAX_CUOTAS;
-  const sinCategorias = categoriasOrdenadas.length === 0;
+  const sinCategorias = selectableCategories.length === 0;
   const sinCuentas = disponibles.length === 0;
   const cuentasDistintas = formData.account_id !== formData.destino;
 
@@ -312,16 +341,6 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
       : []),
   ];
 
-  // Chips de categoria: las mas usadas, mas la elegida si se quedo fuera.
-  const chipsCategorias = useMemo(() => {
-    if (verTodasCategorias) return categoriasOrdenadas;
-    const top = categoriasOrdenadas.slice(0, CHIPS_VISIBLES);
-    if (formData.categoria && !top.includes(formData.categoria)) {
-      return [formData.categoria, ...top.slice(0, CHIPS_VISIBLES - 1)];
-    }
-    return top;
-  }, [categoriasOrdenadas, verTodasCategorias, formData.categoria]);
-
   const previsualizacion = useMemo(() => {
     if (!esCuotas || !importeValido || !cuotasValidas) return null;
     const [year, month, day] = formData.fecha.split('-').map(Number);
@@ -394,29 +413,51 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
           )}
 
           {/* Lo que repites, a un toque. Sale de tu propio historial: no hay
-              nada que configurar ni que mantener. */}
+              nada que configurar ni que mantener.
+
+              Plegado por defecto: seis plantillas en rejilla empujaban el
+              importe —el campo que SIEMPRE hay que llenar— fuera de la primera
+              pantalla del celular. Es un atajo para cuando aplica, no el camino
+              principal, asi que se anuncia con el conteo y se abre si lo pides. */}
           {mostrarPlantillas && (
             <div className="modal-plantillas">
-              <span className="modal-plantillas__titulo">
-                <Zap size={13} />
-                Lo de siempre
-              </span>
-              <div className="modal-plantillas__lista">
-                {plantillas.map(plantilla => (
-                  <button
-                    key={plantilla.key}
-                    type="button"
-                    className="modal-plantilla"
-                    onClick={() => aplicarPlantilla(plantilla)}
-                  >
-                    <strong>{plantilla.descripcion}</strong>
-                    <span>
-                      {plantilla.tipo === 'Gasto' ? '−' : '+'}
-                      {formatCurrency(plantilla.importe)} · {plantilla.categoria}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <button
+                type="button"
+                className="modal-plantillas__toggle"
+                aria-expanded={plantillasAbiertas}
+                aria-controls="tx-plantillas"
+                onClick={() => setPlantillasAbiertas(abierto => !abierto)}
+              >
+                <span className="modal-plantillas__titulo">
+                  <Zap size={13} />
+                  Lo de siempre
+                  <span className="modal-plantillas__conteo">{plantillas.length}</span>
+                </span>
+                <ChevronDown
+                  size={16}
+                  aria-hidden="true"
+                  className={`modal-plantillas__chevron ${plantillasAbiertas ? 'is-abierto' : ''}`}
+                />
+              </button>
+
+              {plantillasAbiertas && (
+                <div className="modal-plantillas__lista" id="tx-plantillas">
+                  {plantillas.map(plantilla => (
+                    <button
+                      key={plantilla.key}
+                      type="button"
+                      className="modal-plantilla"
+                      onClick={() => aplicarPlantilla(plantilla)}
+                    >
+                      <strong>{plantilla.descripcion}</strong>
+                      <span>
+                        {plantilla.tipo === 'Gasto' ? '−' : '+'}
+                        {formatCurrency(plantilla.importe)} · {plantilla.categoria}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -447,50 +488,39 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
           </div>
 
           {/**
-           * Categoria como chips y no como <select>.
+           * Categoria como <select> en orden alfabetico.
            *
-           * En el celular un select abre el selector del sistema: tocar, rodar,
-           * elegir, confirmar. Los chips son un solo toque, y con las
-           * categorias ordenadas por uso la que buscas casi siempre esta a la
-           * vista. "Más…" despliega el resto, asi que ninguna queda
-           * inalcanzable ni con el teclado ni con lector de pantalla: cada chip
-           * es un boton de verdad con su aria-pressed.
+           * Antes eran chips ordenados por uso. Con quince categorias ocupaban
+           * tres filas dentro de un modal que ya es largo, y el orden por uso
+           * obliga a recorrerlas todas con la vista: no hay donde "saltar",
+           * porque la posicion de cada una cambia con el historial. Alfabetico
+           * es predecible, y el desplegable ocupa una sola linea.
            */}
           {!esTransferencia && (
             <div style={fieldStyle}>
-              <span style={labelStyle} id="tx-categoria-label">Categoría</span>
+              <label style={labelStyle} htmlFor="tx-categoria">Categoría</label>
 
               {sinCategorias ? (
                 <p style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>
                   Agrega al menos una categoría en Configuración para poder guardar.
                 </p>
               ) : (
-                <div className="modal-chips" role="group" aria-labelledby="tx-categoria-label">
-                  {chipsCategorias.map(categoria => (
-                    <button
-                      key={categoria}
-                      type="button"
-                      aria-pressed={formData.categoria === categoria}
-                      className={`badge-btn ${formData.categoria === categoria ? 'active' : ''}`}
-                      onClick={() => {
-                        setCategoriaTocada(true);
-                        setSugerenciaAplicada(false);
-                        set('categoria', categoria);
-                      }}
-                    >
+                <select
+                  id="tx-categoria"
+                  value={formData.categoria}
+                  onChange={event => {
+                    setCategoriaTocada(true);
+                    setSugerenciaAplicada(false);
+                    set('categoria', event.target.value);
+                  }}
+                  style={inputStyle}
+                >
+                  {opcionesCategoria.map(categoria => (
+                    <option key={categoria} value={categoria}>
                       {categoria}
-                    </button>
+                    </option>
                   ))}
-                  {!verTodasCategorias && categoriasOrdenadas.length > chipsCategorias.length && (
-                    <button
-                      type="button"
-                      className="badge-btn"
-                      onClick={() => setVerTodasCategorias(true)}
-                    >
-                      Más…
-                    </button>
-                  )}
-                </div>
+                </select>
               )}
             </div>
           )}
