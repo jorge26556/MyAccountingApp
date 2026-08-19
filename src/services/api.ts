@@ -463,6 +463,36 @@ export const deleteCategory = async (
   }
 };
 
+export const MENSAJE_MIGRACION_RENOMBRAR =
+  'Renombrar categorías necesita la migración 007. Ejecuta supabase/007_renombrar_categoria.sql en el SQL Editor de Supabase.';
+
+/**
+ * Renombrar no es un update de una fila: el nombre de la categoria viaja como
+ * texto en `transactions`, `budgets` y `recurring_transactions`. Cuatro UPDATE
+ * sueltos desde aqui dejarian el historial a medias si se corta la señal entre
+ * uno y otro, asi que la operacion vive en el RPC `rename_category`, que corre
+ * las cuatro en una sola transaccion.
+ */
+export const renameCategory = async (oldName: string, newName: string): Promise<void> => {
+  const anterior = normalize(oldName);
+  const nuevo = normalize(newName);
+
+  if (!nuevo) throw new Error('El nombre de la categoria es obligatorio');
+  if (anterior === nuevo) return;
+
+  const { error } = await supabase.rpc('rename_category', { p_old: anterior, p_new: nuevo });
+
+  if (error) {
+    // PGRST202 = la funcion no existe todavia en el esquema.
+    if (error.code === 'PGRST202') throw new Error(MENSAJE_MIGRACION_RENOMBRAR);
+    // P0001 es un `raise exception` nuestro: el mensaje ya viene en castellano
+    // y explica el caso concreto (nombre reservado, categoria inexistente).
+    if (error.code === '23505' || error.code === 'P0001') throw new Error(error.message);
+    console.error('Error renaming category:', error);
+    throw new Error('No se pudo renombrar la categoria');
+  }
+};
+
 /* ────────────────────────────── metas de ahorro ──────────────────────────── */
 
 const mapGoal = (row: Tables<'savings_goals'>): SavingsGoal => ({

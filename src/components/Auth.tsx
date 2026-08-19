@@ -74,11 +74,15 @@ const Auth: React.FC = () => {
 
         if (error) throw error;
 
+        // Antes aqui decia "Ya puedes iniciar sesion" y se volvia al login.
+        // Con la aprobacion manual eso seria mentira: la cuenta existe pero no
+        // sirve hasta que un administrador le de paso. Como la confirmacion de
+        // correo esta desactivada, `signUp` devuelve sesion al instante y el
+        // usuario cae directo en la pantalla de espera, que ya se explica sola.
         setMessage({
           type: 'success',
-          text: 'Cuenta creada. Ya puedes iniciar sesion.',
+          text: 'Cuenta creada. Falta que el administrador la apruebe.',
         });
-        switchMode('login');
         return;
       }
 

@@ -34,6 +34,8 @@ Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 | `supabase/004_cuotas.sql` | `compra_id`, `cuota_numero` y `cuota_total` en `transactions` | Aplicada |
 | `supabase/005_deudas.sql` | `debts` y `transactions.debt_id` | Aplicada |
 | `supabase/006_recibos.sql` | Bucket `recibos` y `transactions.recibo_path` | Aplicada |
+| `supabase/007_renombrar_categoria.sql` | RPC `rename_category` | **Pendiente** |
+| `supabase/008_aprobacion_usuarios.sql` | `user_access`, `es_admin()`, `esta_aprobado()` y cierre de las políticas | **Pendiente** |
 
 Para reconstruir la base desde cero, córrelas en ese orden.
 
@@ -71,6 +73,28 @@ select policyname from pg_policies
    and policyname = 'recibos_bucket_visible';
 ```
 
+### Renombrar una categoría
+
+El nombre de una categoría no es una llave foránea: viaja como **texto** en
+`transactions.categoria`, `budgets.categoria` y `recurring_transactions.categoria`.
+Por eso renombrar pasa por el RPC `rename_category` de la 007 y no por cuatro
+`UPDATE` sueltos desde el cliente: si se corta la señal a la mitad quedarían
+movimientos con el nombre nuevo y presupuestos con el viejo, y nada lo
+señalaría. Dentro del RPC es una sola transacción.
+
+Después de renombrar, ninguna de estas tres debe devolver el nombre viejo:
+
+```sql
+select categoria, count(*) from public.transactions group by categoria;
+select categoria from public.budgets;
+select categoria from public.recurring_transactions;
+```
+
+`Transferencia` y `Préstamo` están vetados como destino: no son categorías del
+usuario sino las etiquetas con las que la app marca las dos patas de una
+transferencia y los movimientos de una deuda, y el resto del código las
+descuenta de ingresos y gastos.
+
 ### Cuadrar una compra a cuotas
 
 La suma de las cuotas siempre es exactamente el total: la última absorbe el
@@ -101,17 +125,57 @@ Después de cualquier migración nueva, regenera los tipos:
 npm run types:supabase
 ```
 
+## Quién puede entrar
+
+Desde la migración 008 el registro sigue abierto, pero **una cuenta nueva nace
+pendiente y no puede leer ni escribir nada** hasta que un administrador la
+apruebe en **Configuración → Usuarios**. Antes de eso cualquiera que abriera la
+URL entraba al instante: RLS le impedía ver datos ajenos, pero no el alta ni el
+consumo de la cuota del proyecto.
+
+El estado vive en `public.user_access`, **no** en una columna de `profiles`. La
+razón: RLS es a nivel de fila, y `profiles_update_own` deja a cada usuario
+actualizar su propia fila entera. Con `aprobado` ahí, cualquiera podría
+auto-aprobarse con un `PATCH` al REST usando la anon key, que va pública dentro
+del bundle.
+
+El filtro lo aplican las propias políticas: las de las siete tablas de datos y
+las del bucket `recibos` llevan `and public.esta_aprobado()`. La pantalla de
+espera de la app es la explicación, no la barrera —si alguien la salta con
+curl, se encuentra la misma puerta cerrada—.
+
+Quedan fuera a propósito `profiles` y `user_access`: sin ellas la pantalla de
+espera no podría ni decirte quién eres ni dejarte cerrar sesión.
+
+```sql
+-- Quién puede entrar y quién manda:
+select p.email, p.id_user, ua.aprobado, ua.es_admin, ua.created_at
+  from public.user_access ua
+  join public.profiles p on p.id = ua.user_id
+ order by ua.created_at desc;
+```
+
+Un administrador no puede quitarse a sí mismo el acceso ni el rol: lo bloquea
+el trigger `user_access_guard_trigger`. Si fuera el único, nadie podría
+devolvérselo y habría que arreglarlo por SQL desde el panel.
+
+Para **eliminar** una cuenta de verdad (no solo revocarla) sigue siendo
+**Authentication → Users** en el panel de Supabase.
+
 ## Ajustes pendientes en el panel de Supabase
 
 Estos no se pueden hacer por SQL ni por migración; hay que entrar al panel.
 
-### 1. Cerrar el registro público (recomendado mientras sea de uso personal)
+### 1. Cerrar el registro público (ya no hace falta)
 
-**Authentication → Sign In / Providers → Email → "Allow new users to sign up": off**
+**Authentication → Sign In / Providers → Email → "Allow new users to sign up"**
 
-Hoy cualquiera que abra la URL puede crear una cuenta y consumir la cuota del
-proyecto. Con esto apagado, los usuarios se crean a mano desde
-**Authentication → Users → Add user**.
+Se recomendaba apagarlo cuando no había ningún filtro. Con la aprobación manual
+de la 008 puede quedarse encendido: el registro está abierto pero no sirve de
+nada sin el visto bueno. Apagarlo sigue siendo una opción si prefieres crear tú
+cada usuario desde **Authentication → Users → Add user**; en ese caso recuerda
+aprobarlo después, porque un usuario creado desde el panel también nace
+pendiente.
 
 ### 2. Activar protección de contraseñas filtradas
 
@@ -122,14 +186,18 @@ El linter de seguridad de Supabase lo reporta mientras esté apagado.
 
 ### 3. Confirmación de correo
 
-Actualmente está **desactivada**: `signUp` devuelve sesión de inmediato. Era lo
-que compensaba el hack de auto-confirmación del antiguo RPC `create_user_profile`,
-que ya se eliminó. Si más adelante quieres exigir verificación de correo:
+Sigue **desactivada**: `signUp` devuelve sesión de inmediato y el usuario cae
+directo en la pantalla de "pendiente de aprobación". Puede quedarse así: la
+aprobación manual cubre el filtro de entrada, y el SMTP por defecto de Supabase
+tiene límites de envío bajos.
+
+Lo que la confirmación añadiría es distinto: comprobar que el correo es
+realmente de quien se registra. Si algún día la activas:
 
 **Authentication → Sign In / Providers → Email → "Confirm email": on**
 
-Ten en cuenta que el SMTP por defecto de Supabase tiene límites bajos de envío;
-para uso real conviene configurar un SMTP propio.
+Y entonces hay que revisar `src/components/Auth.tsx`, que hoy da por hecho que
+tras `signUp` ya hay sesión.
 
 ### 4. URLs de redirección
 

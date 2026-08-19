@@ -6,6 +6,7 @@ import {
   FolderCog,
   PiggyBank,
   Repeat,
+  ShieldCheck,
   Target,
   UserCog,
   Wallet,
@@ -13,6 +14,7 @@ import {
 import type { Account, AccountType, Category, SavingsGoal, Transaction } from '../types';
 import type { SaldoCuenta } from '../lib/accounts';
 import type { Budget, RecurringTransaction } from '../services/extras';
+import type { UsuarioAdmin } from '../services/access';
 import { useIsMobile } from '../lib/useMediaQuery';
 
 import AccountSection from './settings/AccountSection';
@@ -22,6 +24,7 @@ import GoalsSection from './settings/GoalsSection';
 import BudgetsSection from './settings/BudgetsSection';
 import RecurringSection from './settings/RecurringSection';
 import DataSection from './settings/DataSection';
+import UsersSection from './settings/UsersSection';
 
 interface SettingsPanelProps {
   email: string;
@@ -40,6 +43,7 @@ interface SettingsPanelProps {
   onUpdateAccount: (id: string, changes: Partial<Account>) => Promise<void>;
   onDeleteAccount: (id: string, reassignTo?: string) => Promise<void>;
   onAddCategory: (name: string) => Promise<void>;
+  onRenameCategory: (oldName: string, newName: string) => Promise<void>;
   onDeleteCategory: (name: string, reassignTo?: string) => Promise<void>;
   onAddGoal: (name: string, amount: number) => Promise<void>;
   onUpdateGoal: (id: string, name: string, amount: number) => Promise<void>;
@@ -52,6 +56,11 @@ interface SettingsPanelProps {
   onToggleRecurring: (id: string, activo: boolean) => Promise<void>;
   onDeleteRecurring: (id: string) => Promise<void>;
   onImport: (rows: Array<Omit<Transaction, 'id' | 'user_id'>>) => Promise<number>;
+  esAdmin: boolean;
+  miUserId: string;
+  usuarios: UsuarioAdmin[];
+  onSetAprobado: (userId: string, aprobado: boolean) => Promise<void>;
+  onReloadUsuarios: () => Promise<void>;
 }
 
 type SectionId =
@@ -61,9 +70,12 @@ type SectionId =
   | 'metas'
   | 'presupuestos'
   | 'recurrentes'
-  | 'datos';
+  | 'datos'
+  | 'usuarios';
 
-const SECCIONES: Array<{ id: SectionId; label: string; hint: string; icon: React.ElementType }> = [
+type Seccion = { id: SectionId; label: string; hint: string; icon: React.ElementType };
+
+const SECCIONES_BASE: Seccion[] = [
   { id: 'cuentas', label: 'Cuentas', hint: 'Dónde está tu plata y cuánto hay', icon: Wallet },
   { id: 'categorias', label: 'Categorías', hint: 'Cómo clasificas tus movimientos', icon: FolderCog },
   { id: 'presupuestos', label: 'Presupuestos', hint: 'Topes mensuales por categoría', icon: PiggyBank },
@@ -85,6 +97,28 @@ const SECCIONES: Array<{ id: SectionId; label: string; hint: string; icon: React
 const SettingsPanel: React.FC<SettingsPanelProps> = props => {
   const isMobile = useIsMobile();
   const [active, setActive] = useState<SectionId | null>(null);
+
+  /**
+   * La seccion de usuarios solo existe para un administrador. Ocultarla no es
+   * la proteccion —esa la pone la RLS—, es no ensuciar el menu de todos con
+   * algo que no van a poder usar.
+   */
+  const pendientes = props.usuarios.filter(item => !item.aprobado).length;
+
+  const SECCIONES: Seccion[] = props.esAdmin
+    ? [
+        ...SECCIONES_BASE,
+        {
+          id: 'usuarios',
+          label: 'Usuarios',
+          hint:
+            pendientes === 0
+              ? 'Quien puede entrar a la app'
+              : `${pendientes} pendiente(s) de aprobación`,
+          icon: ShieldCheck,
+        },
+      ]
+    : SECCIONES_BASE;
 
   const seccionActiva: SectionId = active ?? 'cuentas';
 
@@ -108,6 +142,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = props => {
             categories={props.categories}
             loading={props.loading}
             onAdd={props.onAddCategory}
+            onRename={props.onRenameCategory}
             onDelete={props.onDeleteCategory}
           />
         );
@@ -140,6 +175,15 @@ const SettingsPanel: React.FC<SettingsPanelProps> = props => {
             onCreate={props.onCreateRecurring}
             onToggle={props.onToggleRecurring}
             onDelete={props.onDeleteRecurring}
+          />
+        );
+      case 'usuarios':
+        return (
+          <UsersSection
+            usuarios={props.usuarios}
+            miUserId={props.miUserId}
+            onSetAprobado={props.onSetAprobado}
+            onReload={props.onReloadUsuarios}
           />
         );
       case 'datos':

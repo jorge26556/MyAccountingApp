@@ -43,6 +43,9 @@ import {
   soloIngresosYGastos,
 } from './lib/accounts';
 import { formatCurrency, formatPercent } from './lib/format';
+import { fetchAccess, fetchUsuarios, olvidarAccesos, setAprobado } from './services/access';
+import type { Acceso, UsuarioAdmin } from './services/access';
+import PendingApproval from './components/PendingApproval';
 import { downloadCsv } from './lib/csv';
 import { toDateString, today } from './lib/dates';
 import {
@@ -58,6 +61,7 @@ import {
   fetchSavingsGoals,
   fetchTransactions,
   hayColumnasDeCuotas,
+  renameCategory,
   sincronizarPendientes,
   updateSavingsGoal,
   updateTransaction,
@@ -120,6 +124,14 @@ const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [recoveringPassword, setRecoveringPassword] = useState(false);
+
+  /**
+   * Aprobacion de la cuenta. `null` mientras no se sabe: hasta que se resuelve
+   * no se pide ni un dato, porque para una cuenta pendiente la RLS los rechaza
+   * todos y lo unico que se conseguiria es una pantalla de errores.
+   */
+  const [acceso, setAcceso] = useState<Acceso | null>(null);
+  const [usuarios, setUsuarios] = useState<UsuarioAdmin[]>([]);
 
   const [data, setData] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -212,6 +224,9 @@ const App: React.FC = () => {
         setRecurrentes([]);
         setCuentas([]);
         setDeudas([]);
+        setAcceso(null);
+        setUsuarios([]);
+        olvidarAccesos();
         // El snapshot sobrevive al cierre de la app a proposito, pero no al
         // cierre de sesion: son saldos y movimientos en el disco del
         // dispositivo. La cola SI se conserva —son movimientos que el usuario
@@ -399,14 +414,54 @@ const App: React.FC = () => {
     void loadAppData(true);
   }, [loadAppData]);
 
+  /**
+   * Se resuelve ANTES de pedir ningun dato. Para una cuenta pendiente la RLS
+   * rechaza las ocho tablas, asi que arrancar la carga sin saberlo solo
+   * produciria una pantalla de errores de permisos en vez de una explicacion.
+   */
+  const comprobarAcceso = useCallback(async () => {
+    if (!userId) return;
+    try {
+      setAcceso(await fetchAccess());
+    } catch (err) {
+      console.error('Error comprobando el acceso:', err);
+      // Sin veredicto se asume lo restrictivo, pero con boton de reintentar:
+      // dar por bueno el acceso ante un fallo seria dejar la puerta abierta
+      // justo cuando algo no funciona.
+      setAcceso({ aprobado: false, esAdmin: false });
+    }
+  }, [userId]);
+
   useEffect(() => {
     if (!authReady) return;
     if (!userId) {
+      setAcceso(null);
+      return;
+    }
+    void comprobarAcceso();
+  }, [authReady, userId, comprobarAcceso]);
+
+  const recargarUsuarios = useCallback(async () => {
+    if (!acceso?.esAdmin) return;
+    setUsuarios(await fetchUsuarios());
+  }, [acceso?.esAdmin]);
+
+  useEffect(() => {
+    void recargarUsuarios();
+  }, [recargarUsuarios]);
+
+  useEffect(() => {
+    if (!authReady) return;
+    if (!userId || !acceso) {
+      setLoading(false);
+      return;
+    }
+    if (!acceso.aprobado) {
       setLoading(false);
       return;
     }
     loadAppData();
-  }, [authReady, userId, loadAppData]);
+  }, [authReady, userId, acceso, loadAppData]);
 
   /**
    * Al recuperar la señal se sube la cola sola, sin que el usuario tenga que
@@ -417,7 +472,9 @@ const App: React.FC = () => {
   useEffect(() => {
     const alConectar = () => {
       setEnLinea(true);
-      loadAppData();
+      // Una cuenta pendiente esta en la pantalla de espera: pedir datos al
+      // volver la señal solo produciria rechazos de la RLS.
+      if (acceso?.aprobado) loadAppData();
     };
     const alDesconectar = () => setEnLinea(false);
 
@@ -427,7 +484,7 @@ const App: React.FC = () => {
       window.removeEventListener('online', alConectar);
       window.removeEventListener('offline', alDesconectar);
     };
-  }, [loadAppData]);
+  }, [acceso?.aprobado, loadAppData]);
 
   /* ─────────────────────────── periodo y filtros ──────────────────────── */
 
@@ -770,9 +827,24 @@ const App: React.FC = () => {
     await reloadCategories();
   };
 
+  /**
+   * Se recarga todo y no solo las categorias: el nombre cambio tambien dentro
+   * de los movimientos, los presupuestos y los recurrentes, que es de donde
+   * salen los KPIs y las graficas.
+   */
+  const handleRenameCategory = async (oldName: string, newName: string) => {
+    await renameCategory(oldName, newName);
+    await Promise.all([reloadCategories(), loadAppData()]);
+  };
+
   const handleDeleteCategory = async (name: string, reassignTo?: string) => {
     await deleteCategory(name, reassignTo);
     await Promise.all([reloadCategories(), loadAppData()]);
+  };
+
+  const handleSetAprobado = async (idUsuario: string, aprobado: boolean) => {
+    await setAprobado(idUsuario, aprobado);
+    await recargarUsuarios();
   };
 
   const handleAddGoal = async (name: string, amount: number) => {
@@ -861,6 +933,19 @@ const App: React.FC = () => {
   }
 
   if (!session) return <Auth />;
+
+  if (!acceso) {
+    return (
+      <div className="loading-container">
+        <div className="spinner" />
+        <p>Comprobando tu acceso...</p>
+      </div>
+    );
+  }
+
+  if (!acceso.aprobado) {
+    return <PendingApproval email={session.user.email} onRetry={comprobarAcceso} />;
+  }
 
   if (loading) {
     return (
@@ -1082,7 +1167,13 @@ const App: React.FC = () => {
               onUpdateAccount={handleUpdateAccount}
               onDeleteAccount={handleDeleteAccount}
               onAddCategory={handleAddCategory}
+              onRenameCategory={handleRenameCategory}
               onDeleteCategory={handleDeleteCategory}
+              esAdmin={acceso.esAdmin}
+              miUserId={session.user.id}
+              usuarios={usuarios}
+              onSetAprobado={handleSetAprobado}
+              onReloadUsuarios={recargarUsuarios}
               onAddGoal={handleAddGoal}
               onUpdateGoal={handleUpdateGoal}
               onDeleteGoal={handleDeleteGoal}

@@ -280,12 +280,42 @@ export type Database = {
         };
         Relationships: [];
       };
+      user_access: {
+        Row: {
+          aprobado: boolean;
+          aprobado_en: string | null;
+          aprobado_por: string | null;
+          created_at: string;
+          es_admin: boolean;
+          user_id: string;
+        };
+        Insert: {
+          aprobado?: boolean;
+          aprobado_en?: string | null;
+          aprobado_por?: string | null;
+          created_at?: string;
+          es_admin?: boolean;
+          user_id: string;
+        };
+        Update: {
+          aprobado?: boolean;
+          aprobado_en?: string | null;
+          aprobado_por?: string | null;
+          created_at?: string;
+          es_admin?: boolean;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: {
       [_ in never]: never;
     };
     Functions: {
       delete_own_account: { Args: Record<PropertyKey, never>; Returns: undefined };
+      es_admin: { Args: Record<PropertyKey, never>; Returns: boolean };
+      esta_aprobado: { Args: Record<PropertyKey, never>; Returns: boolean };
+      rename_category: { Args: { p_old: string; p_new: string }; Returns: undefined };
     };
     Enums: {
       [_ in never]: never;

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Archive, ArchiveRestore, Plus, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, Edit2, Plus, Trash2, X } from 'lucide-react';
 import type { Account, AccountType } from '../../types';
 import type { SaldoCuenta } from '../../lib/accounts';
 import { countTransactionsByAccount } from '../../services/accounts';
@@ -35,6 +35,10 @@ const AccountsSection: React.FC<AccountsSectionProps> = ({
   const [saldoInicial, setSaldoInicial] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editNombre, setEditNombre] = useState('');
+  const [editTipo, setEditTipo] = useState<AccountType>('Banco');
+  const [editSaldo, setEditSaldo] = useState('');
 
   const cuentas = saldos.map(item => item.cuenta);
 
@@ -73,6 +77,37 @@ const AccountsSection: React.FC<AccountsSectionProps> = ({
     }
   };
 
+  const startEdit = (cuenta: Account) => {
+    setPendingDelete(null);
+    setEditingId(cuenta.id);
+    setEditNombre(cuenta.nombre);
+    setEditTipo(cuenta.tipo);
+    setEditSaldo(String(cuenta.saldoInicial));
+  };
+
+  /**
+   * El error probable aqui es el 23505 ("ya tienes una cuenta con ese nombre"),
+   * y llega despues de que el usuario reescribio los tres campos. Por eso al
+   * fallar el formulario NO se cierra: cerrarlo perderia lo escrito y obligaria
+   * a empezar de cero para cambiar una letra.
+   */
+  const handleSaveEdit = async (id: string) => {
+    setSaving(true);
+    try {
+      await onUpdate(id, {
+        nombre: editNombre,
+        tipo: editTipo,
+        saldoInicial: editSaldo.trim() === '' ? 0 : Number(editSaldo),
+      });
+      toast.success('Cuenta actualizada');
+      setEditingId(null);
+    } catch (error) {
+      toast.error(errorMessage(error, 'No se pudo actualizar la cuenta'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const toggleArchivada = async (cuenta: Account) => {
     try {
       await onUpdate(cuenta.id, { archivada: !cuenta.archivada });
@@ -86,6 +121,7 @@ const AccountsSection: React.FC<AccountsSectionProps> = ({
     try {
       const afectados = await countTransactionsByAccount(cuenta.id);
       const destino = cuentas.find(item => item.id !== cuenta.id)?.id ?? '';
+      setEditingId(null);
       setPendingDelete({ cuenta, afectados, reassignTo: afectados > 0 ? destino : '' });
     } catch (error) {
       toast.error(errorMessage(error, 'No se pudo verificar la cuenta'));
@@ -110,6 +146,9 @@ const AccountsSection: React.FC<AccountsSectionProps> = ({
 
   const saldoInicialNumerico = saldoInicial.trim() === '' ? 0 : Number(saldoInicial);
   const saldoInicialValido = Number.isFinite(saldoInicialNumerico);
+
+  const editSaldoNumerico = editSaldo.trim() === '' ? 0 : Number(editSaldo);
+  const edicionValida = Boolean(editNombre.trim()) && Number.isFinite(editSaldoNumerico);
 
   return (
     <div className="settings-sections">
@@ -195,35 +234,111 @@ const AccountsSection: React.FC<AccountsSectionProps> = ({
         <div className="settings-rows">
           {saldos.map(({ cuenta, saldo, movimientos }) => (
             <div key={cuenta.id} className={`settings-row ${cuenta.archivada ? 'is-paused' : ''}`}>
-              <div>
-                <strong>{cuenta.nombre}</strong>
-                <p>
-                  {cuenta.tipo} · {formatCurrency(saldo)} · {movimientos}{' '}
-                  {movimientos === 1 ? 'movimiento' : 'movimientos'}
-                  {cuenta.archivada && ' · archivada'}
-                </p>
-              </div>
-              <div className="settings-row__actions">
-                <button
-                  type="button"
-                  className="settings-row__icon"
-                  onClick={() => toggleArchivada(cuenta)}
-                  title={cuenta.archivada ? 'Reactivar' : 'Archivar'}
-                  aria-label={cuenta.archivada ? 'Reactivar cuenta' : 'Archivar cuenta'}
-                >
-                  {cuenta.archivada ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-                </button>
-                <button
-                  type="button"
-                  className="danger-action"
-                  onClick={() => startDelete(cuenta)}
-                  disabled={saving || saldos.length <= 1}
-                  title={saldos.length <= 1 ? 'Debe quedar al menos una cuenta' : 'Eliminar'}
-                  aria-label="Eliminar cuenta"
-                >
-                  <Trash2 size={15} />
-                </button>
-              </div>
+              {editingId === cuenta.id ? (
+                <div className="settings-field" style={{ width: '100%' }}>
+                  <input
+                    type="text"
+                    className="input-style"
+                    value={editNombre}
+                    onChange={event => setEditNombre(event.target.value)}
+                    placeholder="Nombre"
+                    aria-label="Nombre de la cuenta"
+                    disabled={saving}
+                  />
+
+                  <div className="settings-grid-2" style={{ marginTop: '0.5rem' }}>
+                    <select
+                      className="input-style"
+                      value={editTipo}
+                      onChange={event => setEditTipo(event.target.value as AccountType)}
+                      aria-label="Tipo de cuenta"
+                      disabled={saving}
+                    >
+                      {TIPOS.map(item => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      step="1"
+                      className="input-style"
+                      value={editSaldo}
+                      onChange={event => setEditSaldo(event.target.value)}
+                      placeholder="Saldo inicial"
+                      aria-label="Saldo inicial"
+                      disabled={saving}
+                    />
+                  </div>
+
+                  <p className="settings-field__hint">
+                    Corregir el saldo inicial mueve el saldo de la cuenta y el total. No crea
+                    ningún movimiento ni toca los que ya registraste.
+                  </p>
+
+                  <div className="settings-inline" style={{ marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="primary-action"
+                      onClick={() => handleSaveEdit(cuenta.id)}
+                      disabled={saving || !edicionValida}
+                    >
+                      <Check size={14} />
+                      {saving ? 'Guardando...' : 'Guardar'}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-link"
+                      onClick={() => setEditingId(null)}
+                      disabled={saving}
+                    >
+                      <X size={14} /> Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <strong>{cuenta.nombre}</strong>
+                    <p>
+                      {cuenta.tipo} · {formatCurrency(saldo)} · {movimientos}{' '}
+                      {movimientos === 1 ? 'movimiento' : 'movimientos'}
+                      {cuenta.archivada && ' · archivada'}
+                    </p>
+                  </div>
+                  <div className="settings-row__actions">
+                    <button
+                      type="button"
+                      className="ghost-icon-button settings-row__icon"
+                      onClick={() => startEdit(cuenta)}
+                      title="Editar"
+                      aria-label={`Editar ${cuenta.nombre}`}
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-row__icon"
+                      onClick={() => toggleArchivada(cuenta)}
+                      title={cuenta.archivada ? 'Reactivar' : 'Archivar'}
+                      aria-label={cuenta.archivada ? 'Reactivar cuenta' : 'Archivar cuenta'}
+                    >
+                      {cuenta.archivada ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => startDelete(cuenta)}
+                      disabled={saving || saldos.length <= 1}
+                      title={saldos.length <= 1 ? 'Debe quedar al menos una cuenta' : 'Eliminar'}
+                      aria-label="Eliminar cuenta"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ))}
         </div>

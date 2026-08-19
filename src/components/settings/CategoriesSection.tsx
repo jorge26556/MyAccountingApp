@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Check, Edit2, Plus, Trash2, X } from 'lucide-react';
 import type { Category } from '../../types';
 import { countTransactionsByCategory } from '../../services/api';
 import { errorMessage, useToast } from '../../lib/toast';
@@ -8,6 +8,7 @@ interface CategoriesSectionProps {
   categories: Category[];
   loading: boolean;
   onAdd: (name: string) => Promise<void>;
+  onRename: (oldName: string, newName: string) => Promise<void>;
   onDelete: (name: string, reassignTo?: string) => Promise<void>;
 }
 
@@ -21,12 +22,15 @@ const CategoriesSection: React.FC<CategoriesSectionProps> = ({
   categories,
   loading,
   onAdd,
+  onRename,
   onDelete,
 }) => {
   const toast = useToast();
   const [newCategory, setNewCategory] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
 
   const handleAdd = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -42,6 +46,31 @@ const CategoriesSection: React.FC<CategoriesSectionProps> = ({
     }
   };
 
+  const startEdit = (category: Category) => {
+    setPendingDelete(null);
+    setEditingId(category.id);
+    setEditName(category.name);
+  };
+
+  /**
+   * El nombre viaja como texto en movimientos, presupuestos y recurrentes, asi
+   * que renombrar los toca todos. De eso se encarga el RPC; aqui solo importa
+   * no cerrar el formulario si falla —el error tipico es un nombre repetido, y
+   * cerrarlo obligaria a reescribirlo entero.
+   */
+  const handleSaveEdit = async (anterior: string) => {
+    setSaving(true);
+    try {
+      await onRename(anterior, editName);
+      toast.success(`Categoría renombrada a "${editName.trim()}"`);
+      setEditingId(null);
+    } catch (error) {
+      toast.error(errorMessage(error, 'No se pudo renombrar la categoría'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   /**
    * Borrar una categoria dejaba transacciones apuntando a un nombre que ya no
    * existia. Primero se cuenta cuantas quedarian huerfanas y se ofrece
@@ -51,6 +80,7 @@ const CategoriesSection: React.FC<CategoriesSectionProps> = ({
     try {
       const affected = await countTransactionsByCategory(name);
       const destino = categories.find(item => item.name !== name)?.name ?? '';
+      setEditingId(null);
       setPendingDelete({ name, affected, reassignTo: affected > 0 ? destino : '' });
     } catch (error) {
       toast.error(errorMessage(error, 'No se pudo verificar la categoría'));
@@ -114,18 +144,71 @@ const CategoriesSection: React.FC<CategoriesSectionProps> = ({
         <div className="settings-rows">
           {categories.map(category => (
             <div key={category.id} className="settings-row">
-              <div>
-                <strong>{category.name}</strong>
-              </div>
-              <button
-                type="button"
-                className="danger-action"
-                onClick={() => startDelete(category.name)}
-                disabled={loading || saving || categories.length <= 1}
-                title={categories.length <= 1 ? 'Debe quedar al menos una categoría' : 'Eliminar'}
-              >
-                <Trash2 size={15} />
-              </button>
+              {editingId === category.id ? (
+                <div className="settings-field" style={{ width: '100%' }}>
+                  <input
+                    type="text"
+                    className="input-style"
+                    value={editName}
+                    onChange={event => setEditName(event.target.value)}
+                    placeholder="Nombre"
+                    aria-label="Nombre de la categoría"
+                    disabled={saving}
+                  />
+
+                  <p className="settings-field__hint">
+                    El nombre nuevo se aplica también a los movimientos ya registrados, al
+                    presupuesto y a los recurrentes que la usen.
+                  </p>
+
+                  <div className="settings-inline" style={{ marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="primary-action"
+                      onClick={() => handleSaveEdit(category.name)}
+                      disabled={saving || !editName.trim() || editName.trim() === category.name}
+                    >
+                      <Check size={14} />
+                      {saving ? 'Guardando...' : 'Guardar'}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-link"
+                      onClick={() => setEditingId(null)}
+                      disabled={saving}
+                    >
+                      <X size={14} /> Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <strong>{category.name}</strong>
+                  </div>
+                  <div className="settings-row__actions">
+                    <button
+                      type="button"
+                      className="ghost-icon-button settings-row__icon"
+                      onClick={() => startEdit(category)}
+                      disabled={loading || saving}
+                      title="Renombrar"
+                      aria-label={`Renombrar ${category.name}`}
+                    >
+                      <Edit2 size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-action"
+                      onClick={() => startDelete(category.name)}
+                      disabled={loading || saving || categories.length <= 1}
+                      title={categories.length <= 1 ? 'Debe quedar al menos una categoría' : 'Eliminar'}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ))}
         </div>
