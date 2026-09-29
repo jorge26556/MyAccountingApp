@@ -907,6 +907,41 @@
   border-top: 1px solid var(--border-color);
 }
 
+.bottom-nav.is-cinco {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+/* El pie de la lista se pega por encima de la barra inferior, no debajo. */
+@media (max-width: 820px) {
+  .lista__pie {
+    bottom: calc(5.2rem + env(safe-area-inset-bottom));
+  }
+
+  .listas {
+    padding: 1.1rem;
+  }
+
+  /* A 375px, nombre + cantidad + precio + boton en una fila dejaban el nombre
+     —lo unico obligatorio— en tres letras. El nombre va en su propia fila. */
+  .lista__agregar,
+  .lista-item__editar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .lista__agregar > input:first-child,
+  .lista-item__editar > input:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .lista-item__editar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
+  }
+
+  .lista__agregar button {
+    width: 3rem;
+  }
+}
+
 .bottom-nav__item {
   display: flex;
   flex-direction: column;

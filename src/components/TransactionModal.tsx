@@ -74,6 +74,8 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
 }) => {
   const toast = useToast();
   const isEditMode = Boolean(editingTransaction);
+  /** Movimiento ligado a una deuda: su categoria no se toca desde aqui. */
+  const esDeDeuda = Boolean(editingTransaction?.debt_id);
   const importeRef = useRef<HTMLInputElement>(null);
 
   // Al editar se parte del movimiento real; al repetir, de una copia con la
@@ -500,7 +502,19 @@ const TransactionModal: React.FC<TransactionModalProps> = ({
             <div style={fieldStyle}>
               <label style={labelStyle} htmlFor="tx-categoria">Categoría</label>
 
-              {sinCategorias ? (
+              {/* Un movimiento de deuda se reconoce por su `debt_id`, pero la
+                  categoria "Préstamo" es lo que se ve en la lista y en el CSV.
+                  Cambiarla dejaria un préstamo disfrazado de "Mercado". */}
+              {esDeDeuda ? (
+                <>
+                  <select id="tx-categoria" value={formData.categoria} disabled style={inputStyle}>
+                    <option value={formData.categoria}>{formData.categoria}</option>
+                  </select>
+                  <span style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Es parte de una deuda: se gestiona desde la pestaña Deudas.
+                  </span>
+                </>
+              ) : sinCategorias ? (
                 <p style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>
                   Agrega al menos una categoría en Configuración para poder guardar.
                 </p>

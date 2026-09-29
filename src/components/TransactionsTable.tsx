@@ -232,9 +232,13 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                   {/* Editar o repetir una sola pata descuadraria el par. */}
                   {!transferencia && (
                     <>
-                      <button type="button" onClick={() => onRepeat(item)}>
-                        <Copy size={15} /> Repetir
-                      </button>
+                      {/* Repetir un abono crearia un gasto normal con categoria
+                          "Préstamo" y sin deuda: los abonos van desde Deudas. */}
+                      {!item.debt_id && (
+                        <button type="button" onClick={() => onRepeat(item)}>
+                          <Copy size={15} /> Repetir
+                        </button>
+                      )}
                       <button type="button" onClick={() => onEdit(item)}>
                         <Pencil size={15} /> Editar
                       </button>
@@ -336,14 +340,16 @@ const TransactionsTable: React.FC<TransactionsTableProps> = ({
                       <div className="tx-table__actions">
                         {!transferencia && !sinSubir && (
                           <>
-                            <button
-                              type="button"
-                              title="Repetir"
-                              aria-label={`Repetir movimiento de ${item.categoria}`}
-                              onClick={() => onRepeat(item)}
-                            >
-                              <Copy size={14} />
-                            </button>
+                            {!item.debt_id && (
+                              <button
+                                type="button"
+                                title="Repetir"
+                                aria-label={`Repetir movimiento de ${item.categoria}`}
+                                onClick={() => onRepeat(item)}
+                              >
+                                <Copy size={14} />
+                              </button>
+                            )}
                             <button
                               type="button"
                               title="Editar"

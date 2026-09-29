@@ -34,8 +34,10 @@ Corre lint, tests y build. Si algo falla, el despliegue también fallaría.
 | `supabase/004_cuotas.sql` | `compra_id`, `cuota_numero` y `cuota_total` en `transactions` | Aplicada |
 | `supabase/005_deudas.sql` | `debts` y `transactions.debt_id` | Aplicada |
 | `supabase/006_recibos.sql` | Bucket `recibos` y `transactions.recibo_path` | Aplicada |
-| `supabase/007_renombrar_categoria.sql` | RPC `rename_category` | **Pendiente** |
-| `supabase/008_aprobacion_usuarios.sql` | `user_access`, `es_admin()`, `esta_aprobado()` y cierre de las políticas | **Pendiente** |
+| `supabase/007_renombrar_categoria.sql` | RPC `rename_category` | Aplicada |
+| `supabase/008_aprobacion_usuarios.sql` | `user_access`, `es_admin()`, `esta_aprobado()` y cierre de las políticas | Aplicada |
+| `supabase/009_listas.sql` | `shopping_lists` y `shopping_items` (pestaña Lista) | Aplicada |
+| `supabase/010_deudas_fecha_limite.sql` | `debts.fecha_limite` (deudas en la Agenda) | Aplicada |
 
 Para reconstruir la base desde cero, córrelas en ese orden.
 

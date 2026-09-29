@@ -12,6 +12,7 @@ const deuda = (over: Partial<Debt> = {}): Debt => ({
   tipo: 'me_deben',
   descripcion: '',
   archivada: false,
+  fecha_limite: null,
   ...over,
 });
 
@@ -76,6 +77,15 @@ describe('estadoDeDeuda · me deben', () => {
     expect(estado.saldada).toBe(true);
   });
 
+  it('el historial va del movimiento mas reciente al mas antiguo', () => {
+    const estado = estadoDeDeuda(juan, [
+      tx({ id: 'viejo', debt_id: 'd1', fecha: new Date(2026, 5, 1) }),
+      tx({ id: 'nuevo', debt_id: 'd1', tipo: 'Ingreso', fecha: new Date(2026, 7, 1) }),
+    ]);
+
+    expect(estado.historial.map(item => item.id)).toEqual(['nuevo', 'viejo']);
+  });
+
   it('ignora los movimientos de otras deudas', () => {
     const estado = estadoDeDeuda(juan, [
       tx({ debt_id: 'd1', importe: 500_000 }),
@@ -132,7 +142,7 @@ describe('resumenDeudas', () => {
     expect(resumen.abiertas).toHaveLength(2);
   });
 
-  it('las archivadas desaparecen del resumen', () => {
+  it('las archivadas no suman ni salen en la lista principal', () => {
     const resumen = resumenDeudas(
       deudas.map(d => (d.id === 'c' ? { ...d, archivada: true } : d)),
       datos
@@ -140,6 +150,22 @@ describe('resumenDeudas', () => {
 
     expect(resumen.debes).toBe(0);
     expect(resumen.estados).toHaveLength(2);
+  });
+
+  it('pero siguen disponibles para verlas y desarchivarlas', () => {
+    const resumen = resumenDeudas(
+      deudas.map(d => (d.id === 'c' ? { ...d, archivada: true } : d)),
+      datos
+    );
+
+    expect(resumen.archivadas.map(e => e.deuda.persona)).toEqual(['Mamá']);
+    expect(resumen.archivadas[0].pendiente).toBe(700_000);
+  });
+
+  it('con solo archivadas igual hay algo que mostrar', () => {
+    const resumen = resumenDeudas([deuda({ id: 'a', archivada: true })], datos);
+    expect(resumen.hayAlgo).toBe(true);
+    expect(resumen.estados).toHaveLength(0);
   });
 
   it('ordena por monto pendiente, de mayor a menor', () => {

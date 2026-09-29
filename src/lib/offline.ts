@@ -1,4 +1,4 @@
-import type { Account, Category, SavingsGoal, Transaction } from '../types';
+import type { Account, Category, Debt, SavingsGoal, Transaction } from '../types';
 import type { Budget, RecurringTransaction } from '../services/extras';
 
 /**
@@ -134,6 +134,11 @@ export interface SnapshotDatos {
   savingsGoals: SavingsGoal[];
   budgets: Budget[];
   recurrentes: RecurringTransaction[];
+  /**
+   * Opcional porque los snapshots guardados antes de que Deudas fuera una
+   * pestaña no lo traen. Sin esto, abrir la app sin señal escondia la pestaña.
+   */
+  debts?: Debt[];
 }
 
 /**

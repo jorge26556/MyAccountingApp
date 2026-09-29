@@ -30,6 +30,8 @@ export interface EstadoDeuda {
   saldada: boolean;
   movimientos: number;
   ultimoMovimiento: Date | null;
+  /** Los movimientos de la deuda, del mas reciente al mas antiguo. */
+  historial: Transaction[];
 }
 
 /**
@@ -43,7 +45,9 @@ const esDireccionOriginal = (tipo: TipoDeuda, movimiento: Transaction): boolean 
   tipo === 'me_deben' ? movimiento.tipo === 'Gasto' : movimiento.tipo === 'Ingreso';
 
 export const estadoDeDeuda = (deuda: Debt, transactions: Transaction[]): EstadoDeuda => {
-  const propios = transactions.filter(item => item.debt_id === deuda.id);
+  const propios = transactions
+    .filter(item => item.debt_id === deuda.id)
+    .sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
 
   let original = 0;
   let abonado = 0;
@@ -70,6 +74,7 @@ export const estadoDeDeuda = (deuda: Debt, transactions: Transaction[]): EstadoD
     saldada: original > 0 && pendiente <= 0,
     movimientos: propios.length,
     ultimoMovimiento,
+    historial: propios,
   };
 };
 
@@ -77,6 +82,12 @@ export interface ResumenDeudas {
   estados: EstadoDeuda[];
   /** Solo las que siguen abiertas, que son las accionables. */
   abiertas: EstadoDeuda[];
+  /**
+   * Las archivadas van aparte: no suman a los totales ni salen en la lista
+   * principal, pero tienen que poder verse y desarchivarse. Antes se filtraban
+   * sin mas y la unica forma de recuperarlas era el "Deshacer" del aviso.
+   */
+  archivadas: EstadoDeuda[];
   teDeben: number;
   debes: number;
   hayAlgo: boolean;
@@ -86,11 +97,13 @@ export const resumenDeudas = (
   deudas: Debt[],
   transactions: Transaction[]
 ): ResumenDeudas => {
-  const estados = deudas
-    .filter(deuda => !deuda.archivada)
+  const todos = deudas
     .map(deuda => estadoDeDeuda(deuda, transactions))
     // Las mas grandes primero: son las que importan.
     .sort((a, b) => b.pendiente - a.pendiente || a.deuda.persona.localeCompare(b.deuda.persona));
+
+  const estados = todos.filter(estado => !estado.deuda.archivada);
+  const archivadas = todos.filter(estado => estado.deuda.archivada);
 
   const abiertas = estados.filter(estado => !estado.saldada && estado.pendiente > 0);
 
@@ -102,9 +115,10 @@ export const resumenDeudas = (
   return {
     estados,
     abiertas,
+    archivadas,
     teDeben: sumar('me_deben'),
     debes: sumar('debo'),
-    hayAlgo: estados.length > 0,
+    hayAlgo: todos.length > 0,
   };
 };
 

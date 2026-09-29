@@ -19,9 +19,13 @@ import AgendaPanel from './components/AgendaPanel';
 import BudgetsPanel from './components/BudgetsPanel';
 import AccountMenu from './components/AccountMenu';
 import DeudasPanel from './components/DeudasPanel';
+import DeudasResumen from './components/DeudasResumen';
 import DeudaModal from './components/DeudaModal';
-import type { AbonoInput, NuevaDeudaInput } from './components/DeudaModal';
+import type { MovimientoInput, NuevaDeudaInput } from './components/DeudaModal';
 import RefreshButton from './components/RefreshButton';
+import ListasPanel from './components/ListasPanel';
+import ListaDetalle, { type NuevoItemInput } from './components/ListaDetalle';
+import type { TerminarCompraInput } from './components/TerminarCompraModal';
 
 // recharts pesa mas que todo el resto de la app junta. Cargarlo aparte deja que
 // las vistas de transacciones y configuracion no lo descarguen nunca.
@@ -76,6 +80,21 @@ import {
 } from './services/deudas';
 import { borrarRecibo, recibosDisponibles, subirRecibo } from './services/recibos';
 import { resumenDeudas, type EstadoDeuda } from './lib/deudas';
+import type { CambiosItem } from './lib/listas';
+import {
+  actualizarItem,
+  actualizarLista,
+  borrarCopiaListas,
+  borrarItem,
+  borrarLista,
+  cambiosListasPendientes,
+  completarLista,
+  crearItem,
+  crearLista,
+  fetchListas,
+  sincronizarListas,
+  type ResultadoListas,
+} from './services/listas';
 import { actualizarBadge } from './lib/badge';
 import { borrarSnapshots, estaEnLinea, guardarSnapshot, leerSnapshot } from './lib/offline';
 import {
@@ -105,6 +124,8 @@ import type {
   DashboardFilters,
   Debt,
   SavingsGoal,
+  ShoppingItem,
+  ShoppingList,
   Transaction,
 } from './types';
 
@@ -114,8 +135,11 @@ type ModalState =
   | { mode: 'edit'; tx: Transaction }
   | { mode: 'repeat'; tx: Transaction };
 
-/** El modal de deudas: crear una nueva, o abonar a una existente. */
-type DeudaModalState = null | { modo: 'nueva' } | { modo: 'abono'; estado: EstadoDeuda };
+/** El modal de deudas: crear una nueva, o abonar / prestar mas en una existente. */
+type DeudaModalState =
+  | null
+  | { modo: 'nueva' }
+  | { modo: 'movimiento'; estado: EstadoDeuda; operacion: 'original' | 'abono' };
 
 const App: React.FC = () => {
   const toast = useToast();
@@ -145,9 +169,21 @@ const App: React.FC = () => {
   const [hayCuotas, setHayCuotas] = useState(false);
   const [deudas, setDeudas] = useState<Debt[]>([]);
   const [hayDeudas, setHayDeudas] = useState(false);
+  const [listas, setListas] = useState<ShoppingList[]>([]);
+  const [listaItems, setListaItems] = useState<ShoppingItem[]>([]);
+  const [hayListas, setHayListas] = useState(false);
+  /** Cambios de listas hechos sin señal que esperan subir. */
+  const [cambiosListas, setCambiosListas] = useState(0);
   const [hayRecibos, setHayRecibos] = useState(false);
   const [deudaModal, setDeudaModal] = useState<DeudaModalState>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * true hasta que termina la PRIMERA carga de datos. No sirve `loading`: se
+   * apaga mientras se comprueba el acceso, antes de pedir nada, y las rutas
+   * de Lista y Deudas redirigian al Inicio al recargar la pagina porque en
+   * ese instante `hayListas` y `hayDeudas` todavia eran false.
+   */
+  const [cargaInicial, setCargaInicial] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   /**
@@ -224,6 +260,9 @@ const App: React.FC = () => {
         setRecurrentes([]);
         setCuentas([]);
         setDeudas([]);
+        setListas([]);
+        setListaItems([]);
+        setCargaInicial(true);
         setAcceso(null);
         setUsuarios([]);
         olvidarAccesos();
@@ -232,6 +271,7 @@ const App: React.FC = () => {
         // dispositivo. La cola SI se conserva —son movimientos que el usuario
         // escribio y que no existen en ningun otro lado.
         void borrarSnapshots();
+        borrarCopiaListas();
       }
       setSession(nextSession);
       setAuthReady(true);
@@ -252,6 +292,12 @@ const App: React.FC = () => {
    * la pantalla no se vacia y al terminar se confirma con un aviso, porque el
    * usuario hizo algo y espera respuesta.
    */
+  const aplicarListas = useCallback((resultado: ResultadoListas) => {
+    setListas(resultado.listas);
+    setListaItems(resultado.items);
+    setHayListas(resultado.disponible);
+  }, []);
+
   const loadAppData = useCallback(async (silencioso = false) => {
     if (!userId) return;
     if (silencioso) setRefrescando(true);
@@ -274,6 +320,13 @@ const App: React.FC = () => {
       } catch (err) {
         console.error('Error sincronizando pendientes:', err);
       }
+      // Los cambios de listas hechos sin señal. Van despues de los
+      // movimientos: el gasto de una compra cerrada sin señal sube primero.
+      try {
+        await sincronizarListas();
+      } catch (err) {
+        console.error('Error sincronizando listas:', err);
+      }
     }
 
     try {
@@ -285,6 +338,7 @@ const App: React.FC = () => {
         recurringList,
         accountList,
         debtList,
+        listasRes,
       ] = await Promise.all([
         fetchTransactions(),
         fetchCategories(),
@@ -293,7 +347,14 @@ const App: React.FC = () => {
         fetchRecurring(),
         fetchAccounts(),
         fetchDebts(),
+        // Una funcion nueva no debe tumbar la carga de toda la app.
+        fetchListas().catch((err): ResultadoListas => {
+          console.error('Error cargando listas:', err);
+          return { disponible: false, listas: [], items: [], desdeCopia: false };
+        }),
       ]);
+
+      aplicarListas(listasRes);
 
       setDeudas(debtList.datos);
       setHayDeudas(debtList.disponible);
@@ -362,6 +423,7 @@ const App: React.FC = () => {
         savingsGoals: goalsList,
         budgets: budgetList.datos,
         recurrentes: recurringList.datos,
+        ...(debtList.disponible ? { debts: debtList.datos } : {}),
       });
 
       if (sincronizadas > 0) {
@@ -397,6 +459,14 @@ const App: React.FC = () => {
         setRecurrentes(copia.recurrentes);
         setCuentas(copia.accounts);
         setHayCuentas(copia.accounts.length > 0);
+        if (copia.debts) {
+          setDeudas(copia.debts);
+          setHayDeudas(true);
+        }
+        // Las listas tienen su propia copia local: fetchListas recurre a ella
+        // cuando no hay red.
+        const copiaListas = await fetchListas().catch(() => null);
+        if (copiaListas) aplicarListas(copiaListas);
         setDesdeCache(true);
         setError(null);
       } else {
@@ -405,10 +475,12 @@ const App: React.FC = () => {
       if (silencioso) toast.error(errorMessage(err, 'No se pudo actualizar'));
     } finally {
       setLoading(false);
+      setCargaInicial(false);
       setRefrescando(false);
       setPorSincronizar(await contarPendientesDeSincronizar());
+      setCambiosListas(await cambiosListasPendientes());
     }
-  }, [toast, userId]);
+  }, [toast, userId, aplicarListas]);
 
   const refrescarDatos = useCallback(() => {
     void loadAppData(true);
@@ -523,9 +595,14 @@ const App: React.FC = () => {
   const total = useMemo(() => saldoTotal(saldos), [saldos]);
   const sinCuenta = useMemo(() => movimientosSinCuenta(data), [data]);
 
-  const agenda = useMemo(() => construirAgenda(data, recurrentes), [data, recurrentes]);
-
   const deudasResumen = useMemo(() => resumenDeudas(deudas, data), [deudas, data]);
+  // Las deudas con fecha limite entran en la agenda junto a pendientes y
+  // recurrentes: "Juan me paga el 15" es un cobro con dia, como cualquier otro.
+  const agenda = useMemo(
+    () => construirAgenda(data, recurrentes, today(), deudasResumen.estados),
+    [data, recurrentes, deudasResumen.estados]
+  );
+
 
   /**
    * El contador sobre el icono de la app instalada.
@@ -665,10 +742,10 @@ const App: React.FC = () => {
     );
   };
 
-  const handleAbonar = async (input: AbonoInput) => {
+  const handleMovimientoDeuda = async (input: MovimientoInput) => {
     const movimiento = await registrarMovimientoDeDeuda({
       deuda: input.estado.deuda,
-      operacion: 'abono',
+      operacion: input.operacion,
       importe: input.importe,
       fecha: input.fecha,
       account_id: input.account_id,
@@ -676,12 +753,38 @@ const App: React.FC = () => {
 
     setData(prev => ordenarPorFecha([movimiento, ...prev]));
 
+    if (input.operacion === 'original') {
+      const total = Math.max(0, input.estado.pendiente) + input.importe;
+      toast.success(`Registrado. Ahora el total es ${formatCurrency(total)}`);
+      return;
+    }
+
     const restante = input.estado.pendiente - input.importe;
     toast.success(
       restante > 0
         ? `Registrado. Quedan ${formatCurrency(restante)}`
         : `Deuda con ${input.estado.deuda.persona} saldada`
     );
+  };
+
+  /** Persona y nota. El monto no se edita aqui: sale de los movimientos. */
+  const handleEditarDeuda = async (
+    estado: EstadoDeuda,
+    cambios: Pick<Debt, 'persona' | 'descripcion' | 'fecha_limite'>
+  ) => {
+    const actualizada = await updateDebt(estado.deuda.id, cambios);
+    setDeudas(prev => prev.map(item => (item.id === actualizada.id ? actualizada : item)));
+    toast.success('Deuda actualizada');
+  };
+
+  const handleDesarchivarDeuda = async (estado: EstadoDeuda) => {
+    try {
+      const actualizada = await updateDebt(estado.deuda.id, { archivada: false });
+      setDeudas(prev => prev.map(item => (item.id === actualizada.id ? actualizada : item)));
+      toast.success(`Deuda con ${estado.deuda.persona} restaurada`);
+    } catch (err) {
+      toast.error(errorMessage(err, 'No se pudo desarchivar la deuda'));
+    }
   };
 
   const handleArchivarDeuda = async (estado: EstadoDeuda) => {
@@ -718,6 +821,162 @@ const App: React.FC = () => {
     } catch (err) {
       toast.error(errorMessage(err, 'No se pudo eliminar la deuda'));
     }
+  };
+
+  /* ────────────────────────────── listas ──────────────────────────────── */
+
+  const refrescarCambiosListas = () => {
+    void cambiosListasPendientes().then(setCambiosListas);
+  };
+
+  const handleCrearLista = async (nombre: string, categoria: string) => {
+    const { lista } = await crearLista({ nombre, categoria });
+    setListas(prev => [lista, ...prev]);
+    navigate(`/lista/${lista.id}`);
+  };
+
+  /** Una lista nueva con los mismos ítems, sin tachar. */
+  const handleRepetirLista = async (origen: ShoppingList) => {
+    const copiar = listaItems
+      .filter(item => item.list_id === origen.id)
+      .sort((a, b) => a.orden - b.orden);
+    const { lista, items } = await crearLista({
+      nombre: origen.nombre,
+      categoria: origen.categoria,
+      items: copiar,
+    });
+    setListas(prev => [lista, ...prev]);
+    setListaItems(prev => [...prev, ...items]);
+    toast.success('Lista nueva con los mismos ítems');
+    navigate(`/lista/${lista.id}`);
+  };
+
+  const handleEditarLista = async (
+    lista: ShoppingList,
+    cambios: Pick<ShoppingList, 'nombre' | 'categoria'>
+  ) => {
+    const actualizada = await actualizarLista(lista.id, cambios);
+    setListas(prev => prev.map(item => (item.id === actualizada.id ? actualizada : item)));
+  };
+
+  const handleBorrarLista = async (lista: ShoppingList) => {
+    await borrarLista(lista.id);
+    setListas(prev => prev.filter(item => item.id !== lista.id));
+    setListaItems(prev => prev.filter(item => item.list_id !== lista.id));
+    refrescarCambiosListas();
+    toast.success('Lista borrada');
+    navigate('/lista');
+  };
+
+  const handleAgregarItem = async (lista: ShoppingList, datos: NuevoItemInput) => {
+    const orden =
+      listaItems
+        .filter(item => item.list_id === lista.id)
+        .reduce((max, item) => Math.max(max, item.orden), -1) + 1;
+    const item = await crearItem({ list_id: lista.id, comprado: false, orden, ...datos });
+    setListaItems(prev => [...prev, item]);
+    refrescarCambiosListas();
+  };
+
+  /**
+   * Tachar se ve al instante y se guarda despues: en el supermercado, esperar
+   * la respuesta del servidor en cada toque haria la lista inusable. Si el
+   * servidor lo rechaza, se deshace y se avisa. Sin señal no falla: se encola.
+   */
+  const handleActualizarItem = (item: ShoppingItem, cambios: CambiosItem) => {
+    setListaItems(prev => prev.map(actual => (actual.id === item.id ? { ...actual, ...cambios } : actual)));
+    actualizarItem(item.id, cambios)
+      .then(refrescarCambiosListas)
+      .catch(err => {
+        setListaItems(prev => prev.map(actual => (actual.id === item.id ? item : actual)));
+        toast.error(errorMessage(err, 'No se pudo guardar el cambio'));
+      });
+  };
+
+  const handleBorrarItem = (item: ShoppingItem) => {
+    setListaItems(prev => prev.filter(actual => actual.id !== item.id));
+    borrarItem(item.id)
+      .then(refrescarCambiosListas)
+      .catch(err => {
+        setListaItems(prev => [...prev, item]);
+        toast.error(errorMessage(err, 'No se pudo quitar'));
+      });
+  };
+
+  /**
+   * Cerrar la compra: primero el gasto, despues la lista.
+   *
+   * En ese orden porque el gasto es lo que importa. Si la lista no se pudiera
+   * cerrar, el gasto ya quedo registrado y basta con cerrarla otra vez; al
+   * reves quedaria una lista "comprada" sin su gasto, que es justo lo que se
+   * queria evitar.
+   */
+  const handleTerminarCompra = async (input: TerminarCompraInput) => {
+    const { lista } = input;
+    const { transaccion, encolada } = await createTransaction({
+      fecha: input.fecha,
+      tipo: 'Gasto',
+      categoria: lista.categoria,
+      importe: input.total,
+      estado_pago: 'Pagado',
+      descripcion: input.descripcion,
+      account_id: input.account_id,
+      transfer_group: null,
+      compra_id: null,
+      cuota_numero: null,
+      cuota_total: null,
+      debt_id: null,
+      recibo_path: null,
+    });
+    setData(prev => ordenarPorFecha([transaccion, ...prev]));
+    if (encolada) setPorSincronizar(total => total + 1);
+
+    try {
+      await completarLista(lista.id, input.total, encolada ? null : transaccion.id);
+    } catch (err) {
+      toast.error(
+        errorMessage(err, 'El gasto quedó registrado, pero no se pudo cerrar la lista. Ciérrala de nuevo.')
+      );
+      return;
+    }
+
+    setListas(prev =>
+      prev.map(item =>
+        item.id === lista.id
+          ? {
+              ...item,
+              estado: 'completada',
+              total: input.total,
+              completada_en: new Date(),
+              transaction_id: encolada ? null : transaccion.id,
+            }
+          : item
+      )
+    );
+
+    const mensaje = `Compra registrada: ${formatCurrency(input.total)} en ${lista.categoria}`;
+
+    if (input.pasarPendientes) {
+      const faltantes = listaItems.filter(item => item.list_id === lista.id && !item.comprado);
+      try {
+        const nueva = await crearLista({
+          nombre: lista.nombre,
+          categoria: lista.categoria,
+          items: faltantes,
+        });
+        setListas(prev => [nueva.lista, ...prev]);
+        setListaItems(prev => [...prev, ...nueva.items]);
+        toast.success(`${mensaje}. Lo que faltó quedó en una lista nueva.`);
+      } catch {
+        toast.success(mensaje);
+        toast.info('No se pudo crear la lista con lo que faltó. Usa "Repetir lista" cuando tengas señal.');
+      }
+    } else {
+      toast.success(encolada ? `${mensaje}. Se subirá cuando vuelva la señal.` : mensaje);
+    }
+
+    refrescarCambiosListas();
+    navigate('/lista');
   };
 
   /* ────────────────────────────── recibos ─────────────────────────────── */
@@ -995,17 +1254,16 @@ const App: React.FC = () => {
 
       <MesEnCurso disponible={disponible} proyeccion={proyeccion} />
 
-      <AgendaPanel agenda={agenda} onMarcarPagado={handleMarcarPagado} />
+      <AgendaPanel
+        agenda={agenda}
+        onMarcarPagado={handleMarcarPagado}
+        onAbonarDeuda={debtId => {
+          const estado = deudasResumen.estados.find(item => item.deuda.id === debtId);
+          if (estado) setDeudaModal({ modo: 'movimiento', estado, operacion: 'abono' });
+        }}
+      />
 
-      {hayDeudas && (
-        <DeudasPanel
-          resumen={deudasResumen}
-          onNueva={() => setDeudaModal({ modo: 'nueva' })}
-          onAbonar={estado => setDeudaModal({ modo: 'abono', estado })}
-          onArchivar={handleArchivarDeuda}
-          onEliminar={handleEliminarDeuda}
-        />
-      )}
+      {hayDeudas && <DeudasResumen resumen={deudasResumen} />}
 
       <BudgetsPanel estados={presupuestos} />
 
@@ -1101,7 +1359,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <TopNav onAdd={openCreate} />
+      <TopNav onAdd={openCreate} conDeudas={hayDeudas} conLista={hayListas} />
 
       <SyncBanner
         enLinea={enLinea}
@@ -1145,6 +1403,78 @@ const App: React.FC = () => {
                 onQuitarRecibo={handleQuitarRecibo}
               />
             </>
+          }
+        />
+        <Route
+          path="/lista"
+          element={
+            hayListas ? (
+              <>
+                {botonActualizar}
+                <ListasPanel
+                  listas={listas}
+                  items={listaItems}
+                  categorias={categoryNames}
+                  cambiosSinSubir={cambiosListas}
+                  onCrear={handleCrearLista}
+                  onRepetir={handleRepetirLista}
+                />
+              </>
+            ) : cargaInicial ? null : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/lista/:id"
+          element={
+            hayListas || cargaInicial ? (
+              <ListaDetalle
+                listas={listas}
+                items={listaItems}
+                categorias={categoryNames}
+                accounts={cuentas}
+                presupuestos={presupuestos}
+                cargando={cargaInicial}
+                onAgregar={handleAgregarItem}
+                onActualizarItem={handleActualizarItem}
+                onBorrarItem={handleBorrarItem}
+                onEditarLista={handleEditarLista}
+                onBorrarLista={handleBorrarLista}
+                onRepetir={handleRepetirLista}
+                onTerminar={handleTerminarCompra}
+              />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
+          path="/deudas"
+          element={
+            hayDeudas ? (
+              <>
+                {botonActualizar}
+                <DeudasPanel
+                  resumen={deudasResumen}
+                  accounts={cuentas}
+                  onNueva={() => setDeudaModal({ modo: 'nueva' })}
+                  onAbonar={estado => setDeudaModal({ modo: 'movimiento', estado, operacion: 'abono' })}
+                  onPrestarMas={estado =>
+                    setDeudaModal({ modo: 'movimiento', estado, operacion: 'original' })
+                  }
+                  onEditar={handleEditarDeuda}
+                  onArchivar={handleArchivarDeuda}
+                  onDesarchivar={handleDesarchivarDeuda}
+                  onEliminar={handleEliminarDeuda}
+                />
+              </>
+            ) : cargaInicial ? null : (
+              // Sin la migracion 005 no hay deudas que mostrar. Se espera a
+              // que termine la carga: al recargar estando en /deudas,
+              // `hayDeudas` todavia es false y mandaria al Inicio sin motivo.
+              <Navigate to="/" replace />
+            )
           }
         />
         <Route
@@ -1207,10 +1537,14 @@ const App: React.FC = () => {
       {deudaModal !== null && (
         <DeudaModal
           accounts={cuentas}
-          abonarA={deudaModal.modo === 'abono' ? deudaModal.estado : undefined}
+          sobre={
+            deudaModal.modo === 'movimiento'
+              ? { estado: deudaModal.estado, operacion: deudaModal.operacion }
+              : undefined
+          }
           onClose={() => setDeudaModal(null)}
           onCrear={handleCrearDeuda}
-          onAbonar={handleAbonar}
+          onMovimiento={handleMovimientoDeuda}
         />
       )}
 

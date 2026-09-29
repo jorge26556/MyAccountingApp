@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { construirAgenda } from './agenda';
 import { toDateString } from './dates';
 import type { RecurringTransaction } from '../services/extras';
-import type { Transaction } from '../types';
+import type { Debt, Transaction } from '../types';
 
 let seq = 0;
 const tx = (fecha: string, over: Partial<Transaction> = {}): Transaction => {
@@ -164,5 +164,66 @@ describe('construirAgenda · recurrentes proyectados', () => {
     const agenda = construirAgenda([tx('2026-08-18', { id: 'mismo' })], [recurrente({ id: 'mismo' })], HOY);
     const claves = agenda.items.map(item => item.key);
     expect(new Set(claves).size).toBe(claves.length);
+  });
+});
+
+describe('construirAgenda · deudas con fecha limite', () => {
+  const deuda = (over: Partial<Debt> = {}): Debt => ({
+    id: `deuda-${++seq}`,
+    persona: 'Juan',
+    tipo: 'me_deben',
+    descripcion: '',
+    archivada: false,
+    fecha_limite: new Date(2026, 7, 16),
+    ...over,
+  });
+
+  it('lo que te deben entra como cobro, por lo que falta', () => {
+    const agenda = construirAgenda([], [], HOY, [
+      { deuda: deuda(), pendiente: 300_000, saldada: false },
+    ]);
+
+    expect(agenda.items).toHaveLength(1);
+    expect(agenda.items[0]).toMatchObject({
+      origen: 'deuda',
+      tipo: 'Ingreso',
+      importe: 300_000,
+      grupo: 'semana',
+      descripcion: 'Juan te paga',
+    });
+    expect(agenda.porCobrar).toBe(300_000);
+    expect(agenda.montoUrgente).toBe(0);
+  });
+
+  it('lo que debes sale y cuenta como urgente', () => {
+    const agenda = construirAgenda([], [], HOY, [
+      { deuda: deuda({ tipo: 'debo', persona: 'Mamá' }), pendiente: 200_000, saldada: false },
+    ]);
+
+    expect(agenda.items[0]).toMatchObject({ tipo: 'Gasto', descripcion: 'Pagarle a Mamá' });
+    expect(agenda.montoUrgente).toBe(200_000);
+  });
+
+  it('una fecha ya pasada queda como vencida', () => {
+    const agenda = construirAgenda([], [], HOY, [
+      { deuda: deuda({ fecha_limite: new Date(2026, 7, 1) }), pendiente: 100_000, saldada: false },
+    ]);
+    expect(agenda.vencidos).toHaveLength(1);
+  });
+
+  it('sin fecha, saldada o archivada no aparece', () => {
+    const agenda = construirAgenda([], [], HOY, [
+      { deuda: deuda({ fecha_limite: null }), pendiente: 100_000, saldada: false },
+      { deuda: deuda(), pendiente: 0, saldada: true },
+      { deuda: deuda({ archivada: true }), pendiente: 100_000, saldada: false },
+    ]);
+    expect(agenda.hayAlgo).toBe(false);
+  });
+
+  it('se ordena junto con los pendientes', () => {
+    const agenda = construirAgenda([tx('2026-08-15'), tx('2026-08-20')], [], HOY, [
+      { deuda: deuda(), pendiente: 100_000, saldada: false },
+    ]);
+    expect(agenda.items.map(item => item.origen)).toEqual(['pendiente', 'deuda', 'pendiente']);
   });
 });

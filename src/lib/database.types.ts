@@ -81,6 +81,7 @@ export type Database = {
           archivada: boolean;
           created_at: string;
           descripcion: string;
+          fecha_limite: string | null;
           id: string;
           persona: string;
           tipo: string;
@@ -90,6 +91,7 @@ export type Database = {
           archivada?: boolean;
           created_at?: string;
           descripcion?: string;
+          fecha_limite?: string | null;
           id?: string;
           persona: string;
           tipo: string;
@@ -99,9 +101,82 @@ export type Database = {
           archivada?: boolean;
           created_at?: string;
           descripcion?: string;
+          fecha_limite?: string | null;
           id?: string;
           persona?: string;
           tipo?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
+      shopping_lists: {
+        Row: {
+          categoria: string;
+          completada_en: string | null;
+          created_at: string;
+          estado: string;
+          id: string;
+          nombre: string;
+          total: number | null;
+          transaction_id: string | null;
+          user_id: string;
+        };
+        Insert: {
+          categoria: string;
+          completada_en?: string | null;
+          created_at?: string;
+          estado?: string;
+          id?: string;
+          nombre: string;
+          total?: number | null;
+          transaction_id?: string | null;
+          user_id: string;
+        };
+        Update: {
+          categoria?: string;
+          completada_en?: string | null;
+          created_at?: string;
+          estado?: string;
+          id?: string;
+          nombre?: string;
+          total?: number | null;
+          transaction_id?: string | null;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
+      shopping_items: {
+        Row: {
+          cantidad: string;
+          comprado: boolean;
+          created_at: string;
+          id: string;
+          list_id: string;
+          nombre: string;
+          orden: number;
+          precio: number | null;
+          user_id: string;
+        };
+        Insert: {
+          cantidad?: string;
+          comprado?: boolean;
+          created_at?: string;
+          id?: string;
+          list_id: string;
+          nombre: string;
+          orden?: number;
+          precio?: number | null;
+          user_id: string;
+        };
+        Update: {
+          cantidad?: string;
+          comprado?: boolean;
+          created_at?: string;
+          id?: string;
+          list_id?: string;
+          nombre?: string;
+          orden?: number;
+          precio?: number | null;
           user_id?: string;
         };
         Relationships: [];

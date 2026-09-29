@@ -84,6 +84,43 @@ export interface Debt {
   tipo: TipoDeuda;
   descripcion: string;
   archivada: boolean;
+  /**
+   * Cuando se espera saldarla. Opcional: con fecha, la deuda abierta entra en
+   * la Agenda de "Próximos pagos"; sin fecha, no molesta.
+   */
+  fecha_limite: Date | null;
+}
+
+export type EstadoLista = 'abierta' | 'completada';
+
+/**
+ * Una lista de compras ligada a una categoria de gasto.
+ *
+ * Al terminarla se registra UN gasto con el valor final en esa categoria, y
+ * `transaction_id` queda apuntando a el.
+ */
+export interface ShoppingList {
+  id: string;
+  nombre: string;
+  categoria: string;
+  estado: EstadoLista;
+  transaction_id: string | null;
+  /** Valor final pagado. Solo en las completadas. */
+  total: number | null;
+  completada_en: Date | null;
+  created_at: Date;
+}
+
+export interface ShoppingItem {
+  id: string;
+  list_id: string;
+  nombre: string;
+  /** Texto libre: "2", "1 kg", "una bolsa". */
+  cantidad: string;
+  /** Estimado y opcional: el valor real es el total de la compra. */
+  precio: number | null;
+  comprado: boolean;
+  orden: number;
 }
 
 export interface Category {

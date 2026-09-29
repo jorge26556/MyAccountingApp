@@ -14,10 +14,13 @@ export interface NuevaDeudaInput {
   importe: number;
   fecha: Date;
   account_id: string | null;
+  fecha_limite: Date | null;
 }
 
-export interface AbonoInput {
+export interface MovimientoInput {
   estado: EstadoDeuda;
+  /** 'abono' baja lo pendiente; 'original' lo sube (prestar mas). */
+  operacion: 'original' | 'abono';
   importe: number;
   fecha: Date;
   account_id: string | null;
@@ -25,11 +28,14 @@ export interface AbonoInput {
 
 interface DeudaModalProps {
   accounts: Account[];
-  /** Si viene, el modal registra un abono a esa deuda en vez de crear una. */
-  abonarA?: EstadoDeuda;
+  /**
+   * Si viene, el modal registra un movimiento sobre esa deuda en vez de crear
+   * una: un abono, o un prestamo mas a la misma persona.
+   */
+  sobre?: { estado: EstadoDeuda; operacion: 'original' | 'abono' };
   onClose: () => void;
   onCrear: (input: NuevaDeudaInput) => Promise<void>;
-  onAbonar: (input: AbonoInput) => Promise<void>;
+  onMovimiento: (input: MovimientoInput) => Promise<void>;
 }
 
 /**
@@ -42,16 +48,18 @@ interface DeudaModalProps {
  */
 const DeudaModal: React.FC<DeudaModalProps> = ({
   accounts,
-  abonarA,
+  sobre,
   onClose,
   onCrear,
-  onAbonar,
+  onMovimiento,
 }) => {
   const toast = useToast();
   const [loading, setLoading] = useState(false);
   const disponibles = cuentasActivas(accounts);
+  const abonarA = sobre?.operacion === 'abono' ? sobre.estado : undefined;
   const esAbono = Boolean(abonarA);
-  const meDeben = abonarA ? abonarA.deuda.tipo === 'me_deben' : true;
+  /** Crear una deuda pide persona y tipo; un movimiento sobre una existente, no. */
+  const esNueva = !sobre;
 
   const [form, setForm] = useState({
     persona: '',
@@ -62,7 +70,10 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
     importe: abonarA ? String(Math.max(0, abonarA.pendiente)) : '',
     fecha: toDateString(today()),
     account_id: disponibles[0]?.id ?? '',
+    fecha_limite: '',
   });
+
+  const meDeben = sobre ? sobre.estado.deuda.tipo === 'me_deben' : form.tipo === 'me_deben';
 
   const set = (key: keyof typeof form, value: string) =>
     setForm(prev => ({ ...prev, [key]: value }));
@@ -77,7 +88,7 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
 
   const importeNumerico = Number(form.importe);
   const importeValido = Number.isFinite(importeNumerico) && importeNumerico > 0;
-  const puedeGuardar = importeValido && !loading && (esAbono || Boolean(form.persona.trim()));
+  const puedeGuardar = importeValido && !loading && (!esNueva || Boolean(form.persona.trim()));
 
   const excedeLoPendiente = Boolean(
     abonarA && importeValido && importeNumerico > abonarA.pendiente
@@ -89,12 +100,19 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
 
     const [year, month, day] = form.fecha.split('-').map(Number);
     const fecha = new Date(year, month - 1, day);
+    const fechaLimite = form.fecha_limite
+      ? (() => {
+          const [y, m, d] = form.fecha_limite.split('-').map(Number);
+          return new Date(y, m - 1, d);
+        })()
+      : null;
 
     setLoading(true);
     try {
-      if (abonarA) {
-        await onAbonar({
-          estado: abonarA,
+      if (sobre) {
+        await onMovimiento({
+          estado: sobre.estado,
+          operacion: sobre.operacion,
           importe: Math.abs(importeNumerico),
           fecha,
           account_id: form.account_id || null,
@@ -107,6 +125,7 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
           importe: Math.abs(importeNumerico),
           fecha,
           account_id: form.account_id || null,
+          fecha_limite: fechaLimite,
         });
       }
       onClose();
@@ -117,11 +136,16 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
     }
   };
 
-  const titulo = esAbono
-    ? meDeben
-      ? `Abono de ${abonarA!.deuda.persona}`
-      : `Pago a ${abonarA!.deuda.persona}`
-    : 'Nueva deuda';
+  const persona = sobre?.estado.deuda.persona ?? '';
+  const titulo = !sobre
+    ? 'Nueva deuda'
+    : esAbono
+      ? meDeben
+        ? `Abono de ${persona}`
+        : `Pago a ${persona}`
+      : meDeben
+        ? `Otro préstamo a ${persona}`
+        : `Otro préstamo de ${persona}`;
 
   return (
     <div
@@ -142,7 +166,7 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-          {!esAbono && (
+          {esNueva && (
             <>
               <div className="modal-modes">
                 {([
@@ -197,7 +221,7 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
               value={form.importe}
               onChange={event => set('importe', event.target.value)}
               required
-              autoFocus={esAbono}
+              autoFocus={!esNueva}
               className="modal-importe"
             />
             <span style={{ marginTop: '0.4rem', fontSize: '0.82rem', color: importeValido ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
@@ -241,7 +265,7 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
             </div>
           </div>
 
-          {!esAbono && (
+          {esNueva && (
             <div style={fieldStyle}>
               <label style={labelStyle} htmlFor="deuda-desc">Nota (opcional)</label>
               <input
@@ -255,8 +279,38 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
             </div>
           )}
 
+          {esNueva && (
+            <div style={fieldStyle}>
+              <label style={labelStyle} htmlFor="deuda-limite">
+                {meDeben ? '¿Cuándo te paga? (opcional)' : '¿Cuándo pagas? (opcional)'}
+              </label>
+              <input
+                id="deuda-limite"
+                type="date"
+                min={form.fecha}
+                value={form.fecha_limite}
+                onChange={event => set('fecha_limite', event.target.value)}
+                style={inputStyle}
+              />
+              <span style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                Con fecha, aparece en Próximos pagos para que no se olvide.
+              </span>
+            </div>
+          )}
+
+          {!esAbono && sobre && (
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: '-0.5rem 0 0' }}>
+              Se suma a los {formatCurrency(Math.max(0, sobre.estado.pendiente))} que{' '}
+              {meDeben ? 'ya te debe' : 'ya le debes'}.
+            </p>
+          )}
+
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
-            {meDeben
+            {esAbono
+              ? meDeben
+                ? 'Entra a la cuenta que elijas, pero no cuenta como ingreso: es plata tuya que vuelve.'
+                : 'Sale de la cuenta que elijas, pero no cuenta como gasto: estás devolviendo lo que te prestaron.'
+              : meDeben
               ? 'Sale de la cuenta que elijas, pero no cuenta como gasto: la plata sigue siendo tuya.'
               : 'Entra a la cuenta que elijas, pero no cuenta como ingreso: es plata que tienes que devolver.'}
           </p>
@@ -283,7 +337,7 @@ const DeudaModal: React.FC<DeudaModalProps> = ({
             }}
           >
             <Save size={17} />
-            {loading ? 'Guardando...' : esAbono ? 'Registrar' : 'Crear deuda'}
+            {loading ? 'Guardando...' : esNueva ? 'Crear deuda' : 'Registrar'}
           </button>
         </form>
       </div>

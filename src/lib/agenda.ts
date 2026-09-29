@@ -1,4 +1,4 @@
-import type { Transaction, TransactionType } from '../types';
+import type { Debt, Transaction, TransactionType } from '../types';
 import type { RecurringTransaction } from '../services/extras';
 import { endOfMonth, startOfMonth, today } from './dates';
 
@@ -16,16 +16,25 @@ import { endOfMonth, startOfMonth, today } from './dates';
  *    como transaccion —se materializan solos al llegar el dia— pero son
  *    exactamente la plata que se te va a ir. Sin ellos, la agenda de alguien
  *    con el arriendo y cinco suscripciones configuradas apareceria vacia.
+ *  - Las deudas abiertas con fecha limite: "Juan me paga el 15" es plata que
+ *    entra ese dia, y "le devuelvo a mamá el 30" es plata que sale.
  */
 
-export type OrigenAgenda = 'pendiente' | 'recurrente';
+export type OrigenAgenda = 'pendiente' | 'recurrente' | 'deuda';
+
+/** Lo que la agenda necesita de una deuda: ya con lo pendiente calculado. */
+export interface DeudaParaAgenda {
+  deuda: Debt;
+  pendiente: number;
+  saldada: boolean;
+}
 export type GrupoAgenda = 'vencido' | 'hoy' | 'semana' | 'despues';
 
 export interface ItemAgenda {
   /** Unico en toda la lista: los dos origenes pueden compartir uuid. */
   key: string;
   origen: OrigenAgenda;
-  /** Id de la transaccion o de la plantilla recurrente, segun el origen. */
+  /** Id de la transaccion, de la plantilla recurrente o de la deuda. */
   id: string;
   fecha: Date;
   tipo: TransactionType;
@@ -73,7 +82,8 @@ const fechaDelRecurrente = (dia: number, referencia: Date): Date => {
 export const construirAgenda = (
   transactions: Transaction[],
   recurrentes: RecurringTransaction[],
-  hoy: Date = today()
+  hoy: Date = today(),
+  deudas: DeudaParaAgenda[] = []
 ): Agenda => {
   const inicioMes = startOfMonth(hoy);
   const items: ItemAgenda[] = [];
@@ -118,6 +128,32 @@ export const construirAgenda = (
         categoria: plantilla.categoria,
         descripcion: plantilla.descripcion,
         importe: Math.abs(plantilla.importe),
+        diasRestantes,
+        grupo: agrupar(diasRestantes),
+      });
+    });
+
+  // Solo lo que sigue abierto y tiene fecha. Una archivada o saldada ya no es
+  // un pago por hacer, y sin fecha no hay dia en que ponerla.
+  deudas
+    .filter(
+      ({ deuda, pendiente, saldada }) =>
+        deuda.fecha_limite !== null && !deuda.archivada && !saldada && pendiente > 0
+    )
+    .forEach(({ deuda, pendiente }) => {
+      const fecha = deuda.fecha_limite as Date;
+      const diasRestantes = diasEntre(hoy, fecha);
+      const meDeben = deuda.tipo === 'me_deben';
+      items.push({
+        key: `deuda-${deuda.id}`,
+        origen: 'deuda',
+        id: deuda.id,
+        fecha,
+        // Lo que te deben entra; lo que debes sale.
+        tipo: meDeben ? 'Ingreso' : 'Gasto',
+        categoria: 'Deuda',
+        descripcion: meDeben ? `${deuda.persona} te paga` : `Pagarle a ${deuda.persona}`,
+        importe: pendiente,
         diasRestantes,
         grupo: agrupar(diasRestantes),
       });

@@ -31,6 +31,8 @@ const mapDebt = (row: Record<string, unknown>): Debt => ({
   tipo: row.tipo as TipoDeuda,
   descripcion: (row.descripcion as string) ?? '',
   archivada: Boolean(row.archivada),
+  // Si la migracion 010 no se ha ejecutado la columna no llega: queda en null.
+  fecha_limite: row.fecha_limite ? parseLocalDate(row.fecha_limite as string) : null,
 });
 
 const mapTransaction = (row: Record<string, unknown>): Transaction => ({
@@ -81,6 +83,7 @@ export interface NuevaDeuda {
   importe: number;
   fecha: Date;
   account_id: string | null;
+  fecha_limite: Date | null;
 }
 
 export interface DeudaCreada {
@@ -112,6 +115,9 @@ export const createDebt = async (input: NuevaDeuda): Promise<DeudaCreada> => {
       persona,
       tipo: input.tipo,
       descripcion: input.descripcion.trim(),
+      // Solo viaja si hay fecha: mandar la columna siempre haria fallar toda
+      // alta de deuda con PGRST204 mientras la migracion 010 no este aplicada.
+      ...(input.fecha_limite ? { fecha_limite: toDateString(input.fecha_limite) } : {}),
     })
     .select()
     .single();
@@ -199,7 +205,7 @@ export const registrarMovimientoDeDeuda = async (
 
 export const updateDebt = async (
   id: string,
-  changes: Partial<Pick<Debt, 'persona' | 'descripcion' | 'archivada'>>
+  changes: Partial<Pick<Debt, 'persona' | 'descripcion' | 'archivada' | 'fecha_limite'>>
 ): Promise<Debt> => {
   const userId = await requireUserId();
 
@@ -211,6 +217,9 @@ export const updateDebt = async (
   }
   if (changes.descripcion !== undefined) payload.descripcion = changes.descripcion.trim();
   if (changes.archivada !== undefined) payload.archivada = changes.archivada;
+  if (changes.fecha_limite !== undefined) {
+    payload.fecha_limite = changes.fecha_limite ? toDateString(changes.fecha_limite) : null;
+  }
 
   const { data, error } = await supabase
     .from('debts')

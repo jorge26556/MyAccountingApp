@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { AlertTriangle, CalendarClock, Check, Repeat } from 'lucide-react';
+import { AlertTriangle, CalendarClock, Check, HandCoins, Repeat } from 'lucide-react';
 import type { Agenda, GrupoAgenda, ItemAgenda } from '../lib/agenda';
 import { formatCurrency } from '../lib/format';
 
 interface AgendaPanelProps {
   agenda: Agenda;
   onMarcarPagado: (id: string) => void;
+  /** Abre el registro del abono de esa deuda. */
+  onAbonarDeuda: (debtId: string) => void;
 }
 
 const TITULOS: Record<GrupoAgenda, string> = {
@@ -37,7 +39,7 @@ const cuando = (item: ItemAgenda): string => {
  * Por defecto solo se ve lo urgente. Lo de dentro de tres semanas no es una
  * decision de hoy y ocupando pantalla solo estorba.
  */
-const AgendaPanel: React.FC<AgendaPanelProps> = ({ agenda, onMarcarPagado }) => {
+const AgendaPanel: React.FC<AgendaPanelProps> = ({ agenda, onMarcarPagado, onAbonarDeuda }) => {
   const [verTodo, setVerTodo] = useState(false);
 
   if (!agenda.hayAlgo) return null;
@@ -72,8 +74,8 @@ const AgendaPanel: React.FC<AgendaPanelProps> = ({ agenda, onMarcarPagado }) => 
         <p className="agenda__alerta">
           <AlertTriangle size={14} />
           {agenda.vencidos.length === 1
-            ? 'Tienes 1 movimiento vencido sin marcar'
-            : `Tienes ${agenda.vencidos.length} movimientos vencidos sin marcar`}
+            ? 'Tienes 1 pago vencido sin marcar'
+            : `Tienes ${agenda.vencidos.length} pagos vencidos sin marcar`}
         </p>
       )}
 
@@ -103,6 +105,12 @@ const AgendaPanel: React.FC<AgendaPanelProps> = ({ agenda, onMarcarPagado }) => 
                         automático
                       </span>
                     )}
+                    {item.origen === 'deuda' && (
+                      <span className="agenda__auto">
+                        <HandCoins size={11} />
+                        deuda
+                      </span>
+                    )}
                   </span>
                 </div>
 
@@ -120,6 +128,19 @@ const AgendaPanel: React.FC<AgendaPanelProps> = ({ agenda, onMarcarPagado }) => 
                     >
                       <Check size={14} />
                       {item.tipo === 'Gasto' ? 'Pagado' : 'Cobrado'}
+                    </button>
+                  )}
+                  {/* Una deuda no se "marca": se le registra un abono, que puede
+                      ser parcial. Por eso abre el formulario en vez de cerrarla. */}
+                  {item.origen === 'deuda' && (
+                    <button
+                      type="button"
+                      className="agenda__pagar"
+                      onClick={() => onAbonarDeuda(item.id)}
+                      aria-label={`Registrar abono: ${item.descripcion}`}
+                    >
+                      <Check size={14} />
+                      {item.tipo === 'Gasto' ? 'Pagar' : 'Abono'}
                     </button>
                   )}
                 </div>
